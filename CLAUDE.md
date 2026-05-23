@@ -36,7 +36,7 @@ There are THREE independent components that must run as separate processes:
   - GND → pin 6
   - SCK pad shorted to ground
   - Uses `dtoverlay=hifiberry-dac`
-  - ALSA device: `hw:2`
+  - ALSA device: `hw:sndrpihifiberry` (by name, not number — number can shift at boot)
 - **Display:** 3.5" touchscreen, 800×480, ft5x06 controller at `/dev/input/event4`
 - **MIDI:** USB MIDI keyboard, ALSA sequencer client (number varies)
 - **User account:** `synth`
@@ -842,7 +842,7 @@ echo "Deploy complete."
 3. Python UI runs on cores 0-1 with normal priority
 4. Communication between UI and FluidSynth is TCP only (port 9800)
 5. Touch events are FINGERDOWN/FINGERMOTION/FINGERUP with normalized coordinates
-6. The audio device is hw:2 (the PCM5102 I2S DAC)
+6. The audio device is hw:sndrpihifiberry (by name — never by number, which can shift at boot)
 7. The touchscreen is /dev/input/event4
 
 ## Known Issues

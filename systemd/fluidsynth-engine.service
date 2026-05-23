@@ -8,7 +8,7 @@ User=synth
 ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
     /usr/bin/fluidsynth \
     -a alsa \
-    -o audio.alsa.device=hw:2 \
+    -o audio.alsa.device=hw:sndrpihifiberry \
     -o audio.period-size=128 \
     -o audio.periods=2 \
     -o synth.sample-rate=48000 \
