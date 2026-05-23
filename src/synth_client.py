@@ -11,14 +11,17 @@ If the connection drops, it reconnects automatically on the next command.
 
 import socket
 import sys
+import time
 
 from config import FLUIDSYNTH_HOST, FLUIDSYNTH_PORT
+
+_PROMPT = b"> "
 
 
 class FluidSynthClient:
     """Persistent TCP connection to a running FluidSynth server."""
 
-    def __init__(self, host=FLUIDSYNTH_HOST, port=FLUIDSYNTH_PORT, timeout=2):
+    def __init__(self, host=FLUIDSYNTH_HOST, port=FLUIDSYNTH_PORT, timeout=5):
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -31,12 +34,22 @@ class FluidSynthClient:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(self.timeout)
             self.sock.connect((self.host, self.port))
-            self.sock.recv(4096)  # consume welcome banner
+            self._read_until_prompt()  # consume welcome banner
             return True
         except Exception as e:
             print(f"FluidSynth connect error: {e}", file=sys.stderr)
             self.sock = None
             return False
+
+    def _read_until_prompt(self):
+        """Read from socket until FluidSynth's '> ' prompt appears."""
+        buf = b""
+        while not buf.endswith(_PROMPT):
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("Connection closed")
+            buf += chunk
+        return buf[: -len(_PROMPT)].decode(errors="replace")
 
     def send(self, cmd):
         """Send a command, reconnecting if needed. Returns response or None."""
@@ -45,7 +58,7 @@ class FluidSynthClient:
                 return None
         try:
             self.sock.sendall((cmd + "\n").encode())
-            return self.sock.recv(4096).decode()
+            return self._read_until_prompt()
         except Exception:
             self.sock = None
             return None
@@ -67,6 +80,8 @@ class FluidSynthController:
         self.client = FluidSynthClient()
         self.current_font = None
         self.gain = 2.0
+        self._connected = False
+        self._last_connection_check = 0.0
 
     def load_soundfont(self, path):
         """Hot-swap the SoundFont in the running FluidSynth."""
@@ -75,7 +90,9 @@ class FluidSynthController:
             self.client.send("select 0 1 0 0")
             self.client.send("reset")
             self.current_font = path
+            self._connected = True
             return True
+        self._connected = False
         return False
 
     def set_gain(self, gain):
@@ -84,5 +101,9 @@ class FluidSynthController:
         self.client.send(f"gain {gain}")
 
     def is_connected(self):
-        """Check if we can talk to FluidSynth."""
-        return self.client.send("fonts") is not None
+        """Return cached connection status, rechecking at most once every 5 seconds."""
+        now = time.monotonic()
+        if now - self._last_connection_check > 5.0:
+            self._connected = self.client.send("fonts") is not None
+            self._last_connection_check = now
+        return self._connected
