@@ -1,13 +1,6 @@
-"""
-FluidSynth process controller.
-
-FluidSynth runs in interactive mode (stdin/stdout pipes, no TCP server).
-The '>' prompt on stdout signals readiness on startup and completion after
-each command — no polling, no fixed sleeps, no connection management.
-"""
+"""FluidSynth process controller."""
 
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -15,6 +8,7 @@ import sys
 from config import cfg
 from controller.backend import AudioBackend
 from controller.midi_monitor import MidiHotplugMonitor
+from controller.socket_client import SocketClient
 
 
 class FluidSynthController(AudioBackend):
@@ -22,32 +16,10 @@ class FluidSynthController(AudioBackend):
     current_font: str | None = None
     gain: float = cfg.audio.default_gain
     _midi_monitor: MidiHotplugMonitor | None = None
+    _client: SocketClient = SocketClient()
 
     def _send_command(self, cmd: str) -> str | None:
-        if not self.process or not self.process.stdin:
-            return None
-        try:
-            self.process.stdin.write((cmd + "\n").encode())
-            self.process.stdin.flush()
-            return self._read_response()
-        except Exception as e:
-            print(f"Command error: {e}", file=sys.stderr)
-            return None
-
-    def _read_response(self) -> str:
-        """Read stdout until the shell prompt — blocks until FluidSynth is done."""
-        assert self.process and self.process.stdout
-        buf = b""
-        fd = self.process.stdout.fileno()
-        while not buf.rstrip().endswith(b">"):
-            ready, _, _ = select.select([fd], [], [], 30.0)
-            if not ready:
-                raise TimeoutError("FluidSynth stopped responding")
-            chunk = os.read(fd, 4096)
-            if not chunk:
-                raise EOFError("FluidSynth stdout closed")
-            buf += chunk
-        return buf.decode(errors="replace")
+        return self._client.send(cmd)
 
     def start(self, soundfont_path: str) -> None:
         if not self.is_running():
@@ -71,19 +43,21 @@ class FluidSynthController(AudioBackend):
             "-o", f"audio.periods={a.periods}",
             "-o", f"synth.sample-rate={a.sample_rate}",
             "-o", f"synth.gain={self.gain}",
+            "-o", f"shell.port={a.fluidsynth_port}",
             "-m", "alsa_seq",
+            "-s",
             soundfont_path,
         ]
 
         try:
             self.process = subprocess.Popen(
                 cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
-            self._read_response()  # blocks until FluidSynth prints its initial '>'
+            self._client.connect()  # blocks until FluidSynth's shell is ready
             return True
         except Exception as e:
             print(f"Error starting FluidSynth: {e}", file=sys.stderr)
@@ -117,13 +91,8 @@ class FluidSynthController(AudioBackend):
         if self._midi_monitor:
             self._midi_monitor.stop()
             self._midi_monitor = None
+        self._client.close()
         if self.process:
-            try:
-                if self.process.stdin:
-                    self.process.stdin.write(b"quit\n")
-                    self.process.stdin.flush()
-            except Exception:
-                pass
             try:
                 os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
                 self.process.wait(timeout=2)
