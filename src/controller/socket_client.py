@@ -1,6 +1,7 @@
 """TCP socket client for FluidSynth's command shell."""
 
 import sys
+import time
 from socket import AF_INET, SOCK_STREAM, socket as Socket
 
 from config import cfg
@@ -11,8 +12,8 @@ _PROMPT = b">"
 class SocketClient:
     """Persistent TCP connection to FluidSynth's command shell.
 
-    Maintains a single connection and reads until the shell prompt so commands
-    can be pipelined without timing hacks. Reconnects automatically on error.
+    Connects lazily on first use, retrying on ConnectionRefused so callers
+    don't need to poll or sleep waiting for FluidSynth to start.
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int | None = None) -> None:
@@ -20,13 +21,26 @@ class SocketClient:
         self._port = port or cfg.audio.fluidsynth_port
         self._sock: Socket | None = None
 
-    def _connect(self) -> Socket:
-        s = Socket(AF_INET, SOCK_STREAM)
-        s.settimeout(5)
-        s.connect((self._host, self._port))
-        self._read_until_prompt(s)  # consume welcome banner + initial prompt
-        self._sock = s
-        return s
+    def _connect(self, timeout: float = 10.0) -> Socket:
+        """Open connection, retrying on ConnectionRefused until FluidSynth is ready."""
+        deadline = time.monotonic() + timeout
+        while True:
+            s = Socket(AF_INET, SOCK_STREAM)
+            try:
+                s.settimeout(min(2.0, max(0.1, deadline - time.monotonic())))
+                s.connect((self._host, self._port))
+                self._read_until_prompt(s)  # consume welcome banner
+                self._sock = s
+                return s
+            except ConnectionRefusedError:
+                s.close()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"FluidSynth shell not ready after {timeout:.0f}s"
+                    )
+            except Exception:
+                s.close()
+                raise
 
     def _read_until_prompt(self, sock: Socket) -> str:
         buf = b""

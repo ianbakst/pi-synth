@@ -9,7 +9,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 from config import cfg
 from controller.backend import AudioBackend
@@ -39,7 +38,7 @@ class FluidSynthController(AudioBackend):
     def _start_process(self, soundfont_path):
         """Launch the FluidSynth process."""
         self.stop()
-        time.sleep(0.3)
+        self._start_midi_monitor()  # before Popen so we catch FluidSynth's ALSA port event
 
         a = cfg.audio
         cmd = [
@@ -66,9 +65,6 @@ class FluidSynthController(AudioBackend):
                 stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
-            time.sleep(1.5)
-            self._connect_midi()
-            self._start_midi_monitor()
             return True
         except Exception as e:
             print(f"Error starting FluidSynth: {e}", file=sys.stderr)
@@ -104,6 +100,7 @@ class FluidSynthController(AudioBackend):
         if self._midi_monitor:
             self._midi_monitor.stop()
             self._midi_monitor = None
+        self._client.close()
         if self.process:
             try:
                 os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
