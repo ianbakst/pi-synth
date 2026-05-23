@@ -1,11 +1,13 @@
 """
 FluidSynth process controller.
 
-Manages the FluidSynth process lifecycle and communicates via TCP socket
-for hot-swapping SoundFonts without restarting.
+FluidSynth runs in interactive mode (stdin/stdout pipes, no TCP server).
+The '>' prompt on stdout signals readiness on startup and completion after
+each command — no polling, no fixed sleeps, no connection management.
 """
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -13,30 +15,48 @@ import sys
 from config import cfg
 from controller.backend import AudioBackend
 from controller.midi_monitor import MidiHotplugMonitor
-from controller.socket_client import SocketClient
 
 
 class FluidSynthController(AudioBackend):
-    """Manages the FluidSynth process via TCP command interface."""
     process: subprocess.Popen | None = None
     current_font: str | None = None
     gain: float = cfg.audio.default_gain
     _midi_monitor: MidiHotplugMonitor | None = None
-    _client: SocketClient = SocketClient()
 
     def _send_command(self, cmd: str) -> str | None:
-        return self._client.send(cmd)
+        if not self.process or not self.process.stdin:
+            return None
+        try:
+            self.process.stdin.write((cmd + "\n").encode())
+            self.process.stdin.flush()
+            return self._read_response()
+        except Exception as e:
+            print(f"Command error: {e}", file=sys.stderr)
+            return None
 
-    def start(self, soundfont_path):
-        """Start FluidSynth if not running, then load the SoundFont."""
+    def _read_response(self) -> str:
+        """Read stdout until the shell prompt — blocks until FluidSynth is done."""
+        assert self.process and self.process.stdout
+        buf = b""
+        fd = self.process.stdout.fileno()
+        while not buf.rstrip().endswith(b">"):
+            ready, _, _ = select.select([fd], [], [], 30.0)
+            if not ready:
+                raise TimeoutError("FluidSynth stopped responding")
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                raise EOFError("FluidSynth stdout closed")
+            buf += chunk
+        return buf.decode(errors="replace")
+
+    def start(self, soundfont_path: str) -> None:
         if not self.is_running():
             self._start_process(soundfont_path)
         else:
             self._swap_soundfont(soundfont_path)
         self.current_font = soundfont_path
 
-    def _start_process(self, soundfont_path):
-        """Launch the FluidSynth process."""
+    def _start_process(self, soundfont_path: str) -> bool:
         self.stop()
         self._start_midi_monitor()  # before Popen so we catch FluidSynth's ALSA port event
 
@@ -51,27 +71,25 @@ class FluidSynthController(AudioBackend):
             "-o", f"audio.periods={a.periods}",
             "-o", f"synth.sample-rate={a.sample_rate}",
             "-o", f"synth.gain={self.gain}",
-            "-o", f"shell.port={a.fluidsynth_port}",
             "-m", "alsa_seq",
-            "-s",
             soundfont_path,
         ]
 
         try:
             self.process = subprocess.Popen(
                 cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
+            self._read_response()  # blocks until FluidSynth prints its initial '>'
             return True
         except Exception as e:
             print(f"Error starting FluidSynth: {e}", file=sys.stderr)
             return False
 
-    def _swap_soundfont(self, soundfont_path):
-        """Hot-swap the SoundFont without restarting."""
+    def _swap_soundfont(self, soundfont_path: str) -> None:
         response = self._send_command(f"load {soundfont_path}")
         if response is None:
             self._start_process(soundfont_path)
@@ -95,13 +113,17 @@ class FluidSynthController(AudioBackend):
         self._midi_monitor = MidiHotplugMonitor(on_connect=self._connect_midi)
         self._midi_monitor.start()
 
-    def stop(self):
-        """Kill the running FluidSynth process."""
+    def stop(self) -> None:
         if self._midi_monitor:
             self._midi_monitor.stop()
             self._midi_monitor = None
-        self._client.close()
         if self.process:
+            try:
+                if self.process.stdin:
+                    self.process.stdin.write(b"quit\n")
+                    self.process.stdin.flush()
+            except Exception:
+                pass
             try:
                 os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
                 self.process.wait(timeout=2)
@@ -118,19 +140,16 @@ class FluidSynthController(AudioBackend):
             stderr=subprocess.DEVNULL,
         )
 
-    def _connect_midi(self):
-        """Connect all MIDI input devices to FluidSynth."""
+    def _connect_midi(self) -> None:
         try:
             result = subprocess.run(
                 ["aconnect", "-l"],
                 capture_output=True, text=True, timeout=5,
             )
-            lines = result.stdout.split("\n")
-
             fluid_client = None
             midi_clients = []
 
-            for line in lines:
+            for line in result.stdout.split("\n"):
                 if line.startswith("client "):
                     parts = line.split(":")
                     client_num = int(parts[0].split()[1])
@@ -150,15 +169,12 @@ class FluidSynthController(AudioBackend):
         except Exception as e:
             print(f"MIDI connect error: {e}", file=sys.stderr)
 
-    def set_gain(self, gain):
-        """Update gain live without restart."""
+    def set_gain(self, gain: float) -> None:
         self.gain = gain
         if self.is_running():
             self._send_command(f"gain {gain}")
 
     def is_running(self) -> bool:
-        """Check if the FluidSynth process is alive."""
         if self.process:
             return self.process.poll() is None
         return False
-    
