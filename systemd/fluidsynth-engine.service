@@ -15,6 +15,7 @@ ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
     -o synth.gain=2.0 \
     -o shell.port=9800 \
     -m alsa_seq \
+    -i \
     -s \
     /home/synth/soundfonts/default.sf2
 LimitRTPRIO=80
