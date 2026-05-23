@@ -32,10 +32,12 @@ class SocketClient:
                 s = Socket(AF_INET, SOCK_STREAM)
                 s.settimeout(2.0)
                 s.connect((self._host, self._port))
+                s.settimeout(None)  # blocking after connect; select handles waits
                 self._sock = s
                 self._read_until_prompt()  # consume welcome banner
                 return
-            except ConnectionRefusedError:
+            except (ConnectionRefusedError, ConnectionResetError):
+                self._sock = None
                 s.close()
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
