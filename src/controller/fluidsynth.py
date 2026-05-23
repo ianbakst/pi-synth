@@ -96,7 +96,6 @@ class FluidSynthController(AudioBackend):
         if self._midi_monitor:
             self._midi_monitor.stop()
             self._midi_monitor = None
-        self._client.close()
         if self.process:
             try:
                 os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
