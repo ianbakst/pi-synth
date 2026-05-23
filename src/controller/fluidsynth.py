@@ -90,8 +90,6 @@ class FluidSynthController(AudioBackend):
                     pass
                 break
 
-        # FluidSynth loads the font asynchronously; wait before issuing more commands
-        time.sleep(1.0)
         self._send_command(f"select 0 {sfid} 0 0")
         self._send_command("reset")
 
