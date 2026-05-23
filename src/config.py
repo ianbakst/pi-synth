@@ -23,7 +23,6 @@ class AudioConfig:
     max_gain: float
     cores: str
     rt_priority: int
-    fluidsynth_port: int
 
 
 @dataclass(frozen=True)
@@ -94,7 +93,6 @@ def _load() -> Config:
             max_gain=a.get("max_gain", 5.0),
             cores=a.get("cores", "2,3"),
             rt_priority=a.get("rt_priority", 80),
-            fluidsynth_port=a.get("fluidsynth_port", 9800),
         ),
         display=DisplayConfig(
             width=d.get("width", 800),

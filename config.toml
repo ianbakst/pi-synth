@@ -9,7 +9,6 @@ default_gain  = 2.0
 max_gain      = 5.0
 cores         = "2,3"
 rt_priority   = 80
-fluidsynth_port = 9800
 
 [display]
 width        = 800
