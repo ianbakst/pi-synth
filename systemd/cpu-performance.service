@@ -1,12 +1,10 @@
 [Unit]
-Description=Lock CPU governor to performance mode
-DefaultDependencies=no
-After=sysinit.target
+Description=Set CPU governor and IRQ affinity
+After=multi-user.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor'
+ExecStart=/bin/bash -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor && for irq in $(ls /proc/irq/); do echo 3 > /proc/irq/$irq/smp_affinity 2>/dev/null; done'
 
 [Install]
 WantedBy=multi-user.target

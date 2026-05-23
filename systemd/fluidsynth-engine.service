@@ -1,0 +1,24 @@
+[Unit]
+Description=FluidSynth Audio Engine
+After=sound.target
+
+[Service]
+Type=simple
+User=synth
+ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
+    /usr/bin/fluidsynth \
+    -a alsa \
+    -o audio.alsa.device=hw:2 \
+    -o audio.period-size=128 \
+    -o audio.periods=2 \
+    -o synth.sample-rate=48000 \
+    -o synth.gain=2.0 \
+    -o shell.port=9800 \
+    -m alsa_seq \
+    -s \
+    /home/synth/soundfonts/default.sf2
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

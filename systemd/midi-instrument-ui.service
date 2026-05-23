@@ -1,0 +1,18 @@
+[Unit]
+Description=MIDI Instrument UI
+After=fluidsynth-engine.service
+Requires=fluidsynth-engine.service
+
+[Service]
+Type=simple
+User=synth
+WorkingDirectory=/home/synth/midi-instrument/src
+ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 main.py
+Restart=always
+RestartSec=2
+Environment=SDL_FBDEV=/dev/fb0
+Environment=SDL_MOUSEDEV=/dev/input/event4
+Environment=SDL_MOUSEDRV=TSLIB
+
+[Install]
+WantedBy=multi-user.target
