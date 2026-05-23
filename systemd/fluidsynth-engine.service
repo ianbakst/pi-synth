@@ -17,6 +17,8 @@ ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
     -m alsa_seq \
     -s \
     /home/synth/soundfonts/default.sf2
+LimitRTPRIO=80
+LimitMEMLOCK=infinity
 Restart=always
 RestartSec=1
 
