@@ -13,7 +13,8 @@ RestartSec=2
 Environment=SDL_FBDEV=/dev/fb0
 Environment=SDL_MOUSEDEV=/dev/input/event4
 Environment=SDL_MOUSEDRV=TSLIB
-Environment=XDG_RUNTIME_DIR=/tmp
+RuntimeDirectory=synth-ui
+Environment=XDG_RUNTIME_DIR=/run/synth-ui
 
 [Install]
 WantedBy=multi-user.target

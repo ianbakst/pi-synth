@@ -237,12 +237,11 @@ class VoiceSwitcherUI:
                 self.synth.load_soundfont(self.soundfonts[index])
                 self._save_state()
 
-    def _handle_slider(self, x):
-        """Handle volume slider interaction."""
+    def _update_slider_value(self, x):
+        """Update self.gain from slider position (visual only, no TCP)."""
         relative_x = x - self.slider_rect.x
         ratio = max(0.0, min(1.0, relative_x / self.slider_rect.width))
         self.gain = ratio * MAX_GAIN
-        self.synth.set_gain(self.gain)
 
     def run(self):
         """Main event loop."""
@@ -265,13 +264,13 @@ class VoiceSwitcherUI:
                     y = int(event.y * SCREEN_H)
                     if self.slider_rect.collidepoint(x, y):
                         self.dragging_slider = True
-                        self._handle_slider(x)
+                        self._update_slider_value(x)
 
                 elif event.type == pygame.FINGERMOTION:
                     x = int(event.x * SCREEN_W)
                     y = int(event.y * SCREEN_H)
                     if self.dragging_slider:
-                        self._handle_slider(x)
+                        self._update_slider_value(x)  # visual only during drag
                     else:
                         dy = event.dy * SCREEN_H
                         if abs(dy) > 2:
@@ -283,6 +282,7 @@ class VoiceSwitcherUI:
                     y = int(event.y * SCREEN_H)
                     if self.dragging_slider:
                         self.dragging_slider = False
+                        self.synth.set_gain(self.gain)  # send to FluidSynth on release
                     elif not finger_moved and LIST_TOP <= y < LIST_BOTTOM:
                         self._handle_list_tap(x, y)
                     finger_moved = False
@@ -292,17 +292,18 @@ class VoiceSwitcherUI:
                     x, y = event.pos
                     if self.slider_rect.collidepoint(x, y):
                         self.dragging_slider = True
-                        self._handle_slider(x)
+                        self._update_slider_value(x)
                     elif LIST_TOP <= y < LIST_BOTTOM:
                         self._handle_list_tap(x, y)
 
                 elif event.type == pygame.MOUSEBUTTONUP:
                     if self.dragging_slider:
                         self.dragging_slider = False
+                        self.synth.set_gain(self.gain)  # send to FluidSynth on release
 
                 elif event.type == pygame.MOUSEMOTION:
                     if self.dragging_slider:
-                        self._handle_slider(event.pos[0])
+                        self._update_slider_value(event.pos[0])
 
                 elif event.type == pygame.MOUSEWHEEL:
                     self.scroll_offset -= event.y * 40
