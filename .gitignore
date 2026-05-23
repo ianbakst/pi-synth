@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.DS_Store
+
+# SoundFont files (place in ~/soundfonts/, not in the repo)
+*.sf2
+*.sf3
+
+# Runtime state
+.midi-instrument-state
