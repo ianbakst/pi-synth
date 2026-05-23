@@ -13,15 +13,15 @@ from collections.abc import Callable
 
 _lib = ctypes.CDLL("libasound.so.2", use_errno=True)
 
-# snd_seq_open mode
-_SND_SEQ_OPEN_INPUT = 1
-# port capabilities
+# snd_seq_open mode  (seq.h: OUTPUT=1, INPUT=2)
+_SND_SEQ_OPEN_INPUT = 2
+# port capabilities  (seq.h)
 _SND_SEQ_PORT_CAP_WRITE      = 1 << 1
 _SND_SEQ_PORT_CAP_SUBS_WRITE = 1 << 6
 # port type
 _SND_SEQ_PORT_TYPE_APPLICATION = 1 << 20
-# event type — snd_seq_event_t.type is the first byte (unsigned char)
-_SND_SEQ_EVENT_PORT_START = 8
+# event types  (seq_event.h: PORT_START=64, not 8 which is KEYPRESS)
+_SND_SEQ_EVENT_PORT_START = 64
 _POLLIN = 1
 
 

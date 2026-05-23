@@ -24,18 +24,11 @@ uv run python src/main.py   # runs with stub audio backend
 
 ## Pi setup
 
-### 1. Install uv
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### 2. Clone and install
+### 1. Clone and install
 
 ```bash
 git clone <repo> ~/synth
 cd ~/synth
-uv sync
 sudo apt-get install -y $(cat apt-requirements.txt)
 ```
 
@@ -68,7 +61,7 @@ Override paths via environment variables:
 ### 5. Run manually
 
 ```bash
-taskset -c 0,1 uv run python src/main.py
+taskset -c 0,1 python3 src/main.py
 ```
 
 ### 6. Install as a service
