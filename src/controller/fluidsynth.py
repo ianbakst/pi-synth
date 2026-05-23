@@ -81,8 +81,18 @@ class FluidSynthController(AudioBackend):
             self._start_process(soundfont_path)
             return
 
-        self._send_command("fonts")
-        self._send_command("select 0 1 0 0")
+        sfid = 1
+        for line in response.splitlines():
+            if "ID" in line:
+                try:
+                    sfid = int(line.split()[-1])
+                except ValueError:
+                    pass
+                break
+
+        # FluidSynth loads the font asynchronously; wait before issuing more commands
+        time.sleep(1.0)
+        self._send_command(f"select 0 {sfid} 0 0")
         self._send_command("reset")
 
     def _start_midi_monitor(self) -> None:

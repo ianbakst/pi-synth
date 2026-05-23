@@ -88,6 +88,8 @@ class MidiHotplugMonitor:
             try:
                 if not select.select(fds, [], [], 1.0)[0]:
                     continue  # timeout — recheck _running
+                if not self._running:
+                    break
                 if _lib.snd_seq_event_input(self._seq, ctypes.byref(ev)) < 0:
                     continue
                 if not ev.value:
