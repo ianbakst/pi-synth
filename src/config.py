@@ -10,7 +10,7 @@ IS_PI = os.path.exists("/sys/firmware/devicetree/base/model")
 
 # --- Paths ---
 SOUNDFONT_DIR = os.path.expanduser("~/soundfonts")
-STATE_FILE = os.path.expanduser("~/.midi-instrument-state")
+STATE_FILE = os.path.expanduser("~/.synth-state")
 
 # --- FluidSynth TCP connection ---
 FLUIDSYNTH_HOST = "127.0.0.1"

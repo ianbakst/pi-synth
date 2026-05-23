@@ -9,4 +9,4 @@ __pycache__/
 *.sf3
 
 # Runtime state
-.midi-instrument-state
+.synth-state

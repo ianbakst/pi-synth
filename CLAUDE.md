@@ -74,7 +74,7 @@ These are already configured on the Pi and should NOT be changed:
 ## Project Structure
 
 ```
-midi-instrument/
+synth/
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md                 # This file
@@ -97,7 +97,7 @@ midi-instrument/
 │   └── .gitkeep
 └── systemd/
     ├── fluidsynth-engine.service   # Audio engine (independent)
-    ├── midi-instrument-ui.service  # Python UI (can crash safely)
+    ├── synth-ui.service  # Python UI (can crash safely)
     └── cpu-performance.service     # CPU governor + IRQ affinity
 ```
 
@@ -136,7 +136,7 @@ WantedBy=multi-user.target
 
 IMPORTANT: There is a default FluidSynth user service that ships with Pi OS that MUST be disabled first: `systemctl --user disable --now fluidsynth.service`
 
-### systemd/midi-instrument-ui.service
+### systemd/synth-ui.service
 
 The touchscreen UI. Depends on FluidSynth being running. Can crash and restart without affecting audio.
 
@@ -149,7 +149,7 @@ Requires=fluidsynth-engine.service
 [Service]
 Type=simple
 User=synth
-WorkingDirectory=/home/synth/midi-instrument/src
+WorkingDirectory=/home/$USER/synth/src
 ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 main.py
 Restart=always
 RestartSec=2
@@ -220,7 +220,7 @@ IS_PI = os.path.exists("/sys/firmware/devicetree/base/model")
 
 # --- Paths ---
 SOUNDFONT_DIR = os.path.expanduser("~/soundfonts")
-STATE_FILE = os.path.expanduser("~/.midi-instrument-state")
+STATE_FILE = os.path.expanduser("~/.synth-state")
 
 # --- FluidSynth TCP connection ---
 FLUIDSYNTH_HOST = "127.0.0.1"
@@ -716,7 +716,7 @@ if __name__ == "__main__":
 
 ```toml
 [project]
-name = "midi-instrument"
+name = "synth"
 version = "0.1.0"
 description = "A dedicated MIDI instrument built on Raspberry Pi with FluidSynth"
 requires-python = ">=3.11"
@@ -759,7 +759,7 @@ systemctl --user disable --now fluidsynth.service
 
 # 2. Copy service files
 sudo cp systemd/fluidsynth-engine.service /etc/systemd/system/
-sudo cp systemd/midi-instrument-ui.service /etc/systemd/system/
+sudo cp systemd/synth-ui.service /etc/systemd/system/
 sudo cp systemd/cpu-performance.service /etc/systemd/system/
 
 # 3. Reload systemd
@@ -768,16 +768,16 @@ sudo systemctl daemon-reload
 # 4. Enable services (they will start on boot)
 sudo systemctl enable cpu-performance.service
 sudo systemctl enable fluidsynth-engine.service
-sudo systemctl enable midi-instrument-ui.service
+sudo systemctl enable synth-ui.service
 
 # 5. Start them now
 sudo systemctl start cpu-performance.service
 sudo systemctl start fluidsynth-engine.service
-sudo systemctl start midi-instrument-ui.service
+sudo systemctl start synth-ui.service
 
 # 6. Check status
 systemctl status fluidsynth-engine.service
-systemctl status midi-instrument-ui.service
+systemctl status synth-ui.service
 ```
 
 IMPORTANT: `fluidsynth-engine.service` needs a default SoundFont at `/home/synth/soundfonts/default.sf2`. Create a symlink to whichever SoundFont you want as default:
@@ -798,7 +798,7 @@ Or set up a udev rule to run it automatically when a USB MIDI device is plugged 
 
 ```bash
 sudo tee /etc/udev/rules.d/99-midi-connect.rules << 'EOF'
-ACTION=="add", SUBSYSTEM=="sound", KERNEL=="midi*", RUN+="/home/synth/midi-instrument/scripts/midi-connect.sh"
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="midi*", RUN+="/home/$USER/synth/scripts/midi-connect.sh"
 EOF
 sudo udevadm control --reload-rules
 ```
@@ -821,7 +821,7 @@ set -e
 PI_USER="${PI_USER:-synth}"
 PI_HOST="${1:-${PI_HOST:-raspberrypi.local}}"
 PI="$PI_USER@$PI_HOST"
-PROJECT="/home/$PI_USER/midi-instrument"
+PROJECT="/home/$PI_USER/synth"
 
 echo "Deploying to $PI:$PROJECT"
 rsync -avz --delete \
@@ -831,7 +831,7 @@ rsync -avz --delete \
 
 ssh "$PI" "sudo apt-get update -qq && xargs sudo apt-get install -y -qq < $PROJECT/apt-requirements.txt"
 ssh "$PI" "cd $PROJECT && python3 -m pytest tests/ -v && echo 'ALL TESTS PASSED'"
-ssh "$PI" "sudo systemctl restart midi-instrument-ui.service"
+ssh "$PI" "sudo systemctl restart synth-ui.service"
 echo "Deploy complete."
 ```
 

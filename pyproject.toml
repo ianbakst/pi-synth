@@ -1,5 +1,5 @@
 [project]
-name = "midi-instrument"
+name = "synth"
 version = "0.1.0"
 description = "A dedicated MIDI instrument built on Raspberry Pi with FluidSynth"
 requires-python = ">=3.11"

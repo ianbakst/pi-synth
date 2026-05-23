@@ -56,7 +56,7 @@ Set `device = "hw:2"` under `[audio]` to bypass card name resolution if needed.
 Override paths via environment variables:
 - `SYNTH_CONFIG` — path to a different config file
 - `SYNTH_SOUNDFONT_DIR` — soundfont directory (default: `~/soundfonts`)
-- `SYNTH_STATE_FILE` — last-selected voice state file (default: `~/.midi-instrument-state`)
+- `SYNTH_STATE_FILE` — last-selected voice state file (default: `~/.synth-state`)
 
 ### 5. Run manually
 
@@ -68,13 +68,13 @@ taskset -c 0,1 python3 src/main.py
 
 ```bash
 sudo cp systemd/cpu-performance.service /etc/systemd/system/
-sudo cp systemd/midi-instrument.service /etc/systemd/system/
+sudo cp systemd/synth.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cpu-performance.service
-sudo systemctl enable --now midi-instrument.service
+sudo systemctl enable --now synth.service
 ```
 
-The service expects the repo at `/home/synth/synth` and the user `synth` in the `audio` group. Adjust `WorkingDirectory` and `User` in `systemd/midi-instrument.service` if your setup differs.
+The service expects the repo at `/home/synth/synth` and the user `synth` in the `audio` group. Adjust `WorkingDirectory` and `User` in `systemd/synth.service` if your setup differs.
 
 ## Boot configuration (Pi)
 
@@ -110,7 +110,7 @@ src/
     layout.py           layout constants
 systemd/
   cpu-performance.service
-  midi-instrument.service
+  synth.service
 config.toml             hardware settings (edit this, not config.py)
 apt-requirements.txt    system packages (fluidsynth, alsa-utils)
 ```
