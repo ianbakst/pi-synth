@@ -10,29 +10,44 @@ Protocol (discovered empirically):
 import logging
 import sys
 
-from socket_client import SocketClient
+from src.clients.constants import (
+    DEFAULT_PORT,
+    FIRST_TIMEOUT,
+    LOAD_TIMEOUT,
+    LOCALHOST,
+    SILENCE_TIMEOUT,
+)
+from src.clients.socket_client import SocketClient
 
 logger = logging.getLogger(__name__)
-
-HOST = "127.0.0.1"
-PORT = 9800
-DEFAULT_TIMEOUT = 5.0
-LOAD_TIMEOUT = 10.0
 
 
 class FluidSynthController:
     """High-level controller for a running FluidSynth instance."""
+    _socket: SocketClient
+    load_timeout: float
 
-    def __init__(self, host: str = HOST, port: int = PORT, timeout: float = DEFAULT_TIMEOUT):
-        self._socket = SocketClient(host=host, port=port, first_timeout=timeout)
+    def __init__(
+        self,
+        host: str = LOCALHOST,
+        port: int = DEFAULT_PORT,
+        timeout: float = FIRST_TIMEOUT,
+        silence_timeout: float = SILENCE_TIMEOUT,
+        load_timeout: float = LOAD_TIMEOUT,
+    ):
+        self._socket = SocketClient(
+            host=host, port=port, first_timeout=timeout, silence_timeout=silence_timeout
+        )
+        self.load_timeout = load_timeout
 
     def _command(self, cmd: str, timeout: float | None = None) -> str | None:
         raw = self._socket.send((cmd + "\n").encode(), first_timeout=timeout)
         return raw.decode() if raw else None
 
-    def load_soundfont(self, path: str) -> bool:
+    def load_soundfont(self, path: str, load_timeout: float | None = None) -> bool:
         """Load a soundfont file and select it on MIDI channel 0."""
-        if self._command(f"load {path}", timeout=LOAD_TIMEOUT) is None:
+        t = self.load_timeout if load_timeout is None else load_timeout
+        if self._command(f"load {path}", timeout=t) is None:
             logger.error("Failed to load soundfont: %s", path)
             return False
         self._command("select 0 1 0 0")
@@ -40,7 +55,9 @@ class FluidSynthController:
         logger.info("Loaded soundfont: %s", path)
         return True
 
-    def select_preset(self, channel: int, sfont_id: int, bank: int, preset: int) -> None:
+    def select_preset(
+        self, channel: int, sfont_id: int, bank: int, preset: int
+    ) -> None:
         """Select a specific bank/preset on a MIDI channel."""
         self._command(f"select {channel} {sfont_id} {bank} {preset}")
 

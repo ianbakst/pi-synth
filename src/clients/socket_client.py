@@ -3,13 +3,14 @@ from socket import AF_INET, SOCK_STREAM, socket
 from contextlib import contextmanager
 from typing import Callable, Generator
 
+from src.clients.constants import (
+    DEFAULT_PORT,
+    FIRST_TIMEOUT,
+    LOCALHOST,
+    SILENCE_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
-
-LOCALHOST = "127.0.0.1"
-DEFAULT_PORT = 9800
-FIRST_TIMEOUT = 5.0
-SILENCE_TIMEOUT = 0.2  # seconds of no data = response complete
 
 
 class SocketClient:
@@ -19,8 +20,8 @@ class SocketClient:
 
     def __init__(
         self,
-        host: str,
-        port: int,
+        host: str = LOCALHOST,
+        port: int = DEFAULT_PORT,
         first_timeout: float = FIRST_TIMEOUT,
         silence_timeout: float = SILENCE_TIMEOUT,
     ):

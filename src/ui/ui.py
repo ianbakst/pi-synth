@@ -11,6 +11,7 @@ SCREEN_W/SCREEN_H to convert.
 
 import glob
 import os
+import threading
 
 import pygame
 
@@ -37,14 +38,12 @@ from config import (
     SLIDER_KNOB,
     SOUNDFONT_DIR,
     STATE_FILE,
-    STATUS_ERR,
-    STATUS_OK,
     TEXT_ACTIVE,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     TOUCH_DEVICE,
 )
-from synth_client import FluidSynthController
+from src.clients import FluidSynthController
 
 LIST_TOP = HEADER_H
 LIST_BOTTOM = SCREEN_H - FOOTER_H
@@ -108,6 +107,7 @@ class VoiceSwitcherUI:
         self.scroll_offset = 0
         self.gain = DEFAULT_GAIN
         self.dragging_slider = False
+        self.loading = False
         self.running = True
         self.slider_rect = pygame.Rect(0, 0, 0, 0)
 
@@ -121,9 +121,12 @@ class VoiceSwitcherUI:
                     last_font = f.read().strip()
                 if last_font in self.soundfonts:
                     self.selected_index = self.soundfonts.index(last_font)
+                    self.loading = True
                     self.synth.load_soundfont(last_font)
             except Exception:
                 pass
+            finally:
+                self.loading = False
 
     def _save_state(self):
         """Save current selection."""
@@ -143,9 +146,7 @@ class VoiceSwitcherUI:
 
         if 0 <= self.selected_index < len(self.soundfonts):
             name = display_name(self.soundfonts[self.selected_index])
-            color = TEXT_ACTIVE
-            status_color = STATUS_OK if self.synth.is_connected() else STATUS_ERR
-            pygame.draw.circle(self.screen, status_color, (20, HEADER_H // 2), 6)
+            color = TEXT_SECONDARY if self.loading else TEXT_ACTIVE
         else:
             name = "No voice selected"
             color = TEXT_SECONDARY
@@ -248,15 +249,25 @@ class VoiceSwitcherUI:
 
     def _handle_list_tap(self, x, y):
         """Handle a tap in the voice list area."""
-        if not self.soundfonts:
+        if not self.soundfonts or self.loading:
             return
         relative_y = y - LIST_TOP + self.scroll_offset
         index = int(relative_y / (BTN_H + BTN_MARGIN))
-        if 0 <= index < len(self.soundfonts):
-            if index != self.selected_index:
-                self.selected_index = index
-                self.synth.load_soundfont(self.soundfonts[index])
-                self._save_state()
+        if 0 <= index < len(self.soundfonts) and index != self.selected_index:
+            self.selected_index = index
+            self._save_state()
+            self.loading = True
+            threading.Thread(
+                target=self._do_load,
+                args=(self.soundfonts[index],),
+                daemon=True,
+            ).start()
+
+    def _do_load(self, path: str) -> None:
+        try:
+            self.synth.load_soundfont(path)
+        finally:
+            self.loading = False
 
     def _update_slider_value(self, x):
         """Update self.gain from slider position (visual only, no TCP)."""
@@ -275,7 +286,7 @@ class VoiceSwitcherUI:
         self._draw_voice_list()
         self._draw_footer()
         pygame.display.flip()
-        self._load_state()
+        threading.Thread(target=self._load_state, daemon=True).start()
 
         while self.running:
             for event in pygame.event.get():
