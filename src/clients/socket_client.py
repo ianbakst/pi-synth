@@ -1,6 +1,6 @@
 import logging
-from socket import AF_INET, SOCK_STREAM, socket
 from contextlib import contextmanager
+from socket import AF_INET, SOCK_STREAM, socket
 from typing import Callable, Generator
 
 from src.clients.constants import (

@@ -10,7 +10,7 @@ import sys
 import pygame
 
 from config import SOUNDFONT_DIR
-from src.ui.ui import VoiceSwitcherUI
+from src.ui import VoiceSwitcherUI
 
 
 def main():

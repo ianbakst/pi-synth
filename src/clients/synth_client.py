@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class FluidSynthController:
     """High-level controller for a running FluidSynth instance."""
+
     _socket: SocketClient
     load_timeout: float
 
