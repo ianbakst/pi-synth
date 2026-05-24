@@ -1,106 +1,160 @@
 """
-TCP client for communicating with a running FluidSynth server.
+FluidSynth TCP shell client.
 
-This module does NOT manage the FluidSynth process. FluidSynth runs
-as an independent systemd service. This client connects to its TCP
-shell (port 9800) to send commands like loading SoundFonts and
-changing gain.
+Two classes:
+  FluidSynthConnection  — one TCP connection, prompt-based framing
+  FluidSynthClient      — persistent client that reconnects on failure
 
-Each command opens a fresh connection, sends one command, drains the
-response by waiting for silence, then closes. This avoids all prompt-
-parsing and buffer-synchronisation problems inherent in keeping a
-persistent connection to a human-oriented REPL.
+The FluidSynth shell sends "> " (greater-than space, no newline) after
+every response. _read_until_prompt() accumulates recv() chunks until
+that two-byte sequence appears at the end of the buffer.
 """
 
+import logging
 import socket
-import sys
-import time
 
-from config import FLUIDSYNTH_HOST, FLUIDSYNTH_PORT
+logger = logging.getLogger(__name__)
 
-_CONNECT_TIMEOUT = 3.0   # TCP handshake
-_BANNER_SILENCE = 0.2    # gap that means "banner is done"
-_RESPONSE_TIMEOUT = 30.0 # wait for first byte of response (covers large soundfont loads)
-_RESPONSE_SILENCE = 0.2  # gap that means "response is done"
+HOST = "127.0.0.1"
+PORT = 9800
+PROMPT = b"> "
+DEFAULT_TIMEOUT = 5.0   # seconds; use a longer value for load commands
 
 
-def _drain(sock, first_timeout, silence):
-    """Read from sock until a silence gap. Returns decoded text or None."""
-    buf = b""
-    sock.settimeout(first_timeout)
-    try:
-        chunk = sock.recv(4096)
-        if not chunk:
-            return ""
-        buf += chunk
-    except socket.timeout:
-        return None
+class FluidSynthConnection:
+    """A single TCP connection to the FluidSynth shell."""
 
-    sock.settimeout(silence)
-    try:
-        while True:
-            chunk = sock.recv(4096)
+    def __init__(self, host=HOST, port=PORT, timeout=DEFAULT_TIMEOUT):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self._sock = None
+
+    def open(self):
+        """Connect and consume the welcome banner. Raises on failure."""
+        logger.info("Connecting to FluidSynth at %s:%d", self.host, self.port)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        sock.connect((self.host, self.port))
+        self._sock = sock
+        banner = self._read_until_prompt()
+        logger.info("Connected. Banner: %r", banner.splitlines()[0] if banner else "")
+        return self
+
+    def close(self):
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+            logger.debug("Connection closed")
+
+    def send(self, cmd, timeout=None):
+        """
+        Send one command, return the response text (prompt stripped).
+        Pass timeout to override the connection-level timeout for slow
+        commands like 'load' that may take many seconds to respond.
+        """
+        assert self._sock is not None, "send() called before open()"
+        old_timeout = self._sock.gettimeout()
+        if timeout is not None:
+            self._sock.settimeout(timeout)
+        try:
+            logger.debug(">>> %s", cmd)
+            self._sock.sendall((cmd + "\n").encode())
+            response = self._read_until_prompt()
+            logger.debug("<<< %s", response if response else "(empty)")
+            return response
+        finally:
+            self._sock.settimeout(old_timeout)
+
+    def _read_until_prompt(self):
+        """
+        Read from the socket until the FluidSynth prompt '> ' appears
+        at the end of the buffer, then return everything before it.
+        """
+        assert self._sock is not None
+        buf = b""
+        while not buf.endswith(PROMPT):
+            chunk = self._sock.recv(4096)
             if not chunk:
-                break
+                raise ConnectionError("FluidSynth closed the connection")
             buf += chunk
-    except socket.timeout:
-        pass
+            logger.debug("recv %d bytes, total %d, tail=%r", len(chunk), len(buf), buf[-8:])
+        text = buf[: -len(PROMPT)].decode(errors="replace").strip()
+        return text
 
-    return buf.decode(errors="replace")
+    def __enter__(self):
+        return self.open()
+
+    def __exit__(self, *_):
+        self.close()
 
 
 class FluidSynthClient:
-    """One-shot TCP commands to a running FluidSynth server."""
+    """
+    Persistent FluidSynth client that reconnects automatically on failure.
+    Holds one FluidSynthConnection and re-opens it if a command fails.
+    """
 
-    def __init__(self, host=FLUIDSYNTH_HOST, port=FLUIDSYNTH_PORT):
+    def __init__(self, host=HOST, port=PORT, timeout=DEFAULT_TIMEOUT):
         self.host = host
         self.port = port
+        self.timeout = timeout
+        self._conn = None
 
-    def send(self, cmd):
-        """Open a connection, send one command, return response text or None."""
-        try:
-            with socket.create_connection(
-                (self.host, self.port), timeout=_CONNECT_TIMEOUT
-            ) as sock:
-                _drain(sock, first_timeout=2.0, silence=_BANNER_SILENCE)
-                sock.sendall((cmd + "\n").encode())
-                return _drain(sock, first_timeout=_RESPONSE_TIMEOUT, silence=_RESPONSE_SILENCE)
-        except Exception as e:
-            print(f"FluidSynth error: {e}", file=sys.stderr)
-            return None
+    def _connection(self):
+        if self._conn is None:
+            conn = FluidSynthConnection(self.host, self.port, self.timeout)
+            conn.open()
+            self._conn = conn
+        return self._conn
+
+    def _drop(self):
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def send(self, cmd, timeout=None):
+        """Send a command, reconnecting once if the connection is broken."""
+        for attempt in range(2):
+            try:
+                return self._connection().send(cmd, timeout=timeout)
+            except Exception as e:
+                logger.warning("Command %r failed (attempt %d): %s", cmd, attempt + 1, e)
+                self._drop()
+        logger.error("Command %r failed after retry, giving up", cmd)
+        return None
+
+    def close(self):
+        self._drop()
 
 
-class FluidSynthController:
-    """High-level interface for controlling FluidSynth."""
+if __name__ == "__main__":
+    import sys
 
-    def __init__(self):
-        self.client = FluidSynthClient()
-        self.current_font = None
-        self.gain = 2.0
-        self._connected = False
-        self._last_connection_check = 0.0
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
 
-    def load_soundfont(self, path):
-        """Hot-swap the SoundFont in the running FluidSynth."""
-        response = self.client.send(f"load {path}")
-        if response is not None:
-            self.client.send("select 0 1 0 0")
-            self.client.send("reset")
-            self.current_font = path
-            self._connected = True
-            return True
-        self._connected = False
-        return False
+    client = FluidSynthClient()
 
-    def set_gain(self, gain):
-        """Change volume."""
-        self.gain = gain
-        self.client.send(f"gain {gain:.2f}")
+    print("\n--- fonts ---")
+    print(client.send("fonts"))
 
-    def is_connected(self):
-        """Return cached connection status, rechecked at most once every 5 seconds."""
-        now = time.monotonic()
-        if now - self._last_connection_check > 5.0:
-            self._connected = self.client.send("fonts") is not None
-            self._last_connection_check = now
-        return self._connected
+    print("\n--- gain (read current) ---")
+    print(client.send("gain"))
+
+    sf = input("\nEnter soundfont path to test load (or blank to skip): ").strip()
+    if sf:
+        print("\n--- load ---")
+        print(client.send(f"load {sf}", timeout=30.0))
+        print("\n--- select ---")
+        print(client.send("select 0 1 0 0"))
+        print("\n--- reset ---")
+        print(client.send("reset"))
+
+    client.close()

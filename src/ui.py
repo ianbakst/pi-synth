@@ -15,15 +15,36 @@ import os
 import pygame
 
 from config import (
-    BG, BTN_ACTIVE, BTN_H, BTN_MARGIN, BTN_NORMAL, BTN_PAD_X,
-    DEFAULT_GAIN, DIVIDER, FOOTER_H, FRAMEBUFFER, HEADER_H, IS_PI,
-    MAX_GAIN, PANEL_BG, SCREEN_H, SCREEN_W, SCROLL_BAR_W,
-    SLIDER_BG, SLIDER_FILL, SLIDER_KNOB, SOUNDFONT_DIR, STATE_FILE,
-    STATUS_ERR, STATUS_OK, TEXT_ACTIVE, TEXT_PRIMARY, TEXT_SECONDARY,
+    BG,
+    BTN_ACTIVE,
+    BTN_H,
+    BTN_MARGIN,
+    BTN_NORMAL,
+    BTN_PAD_X,
+    DEFAULT_GAIN,
+    DIVIDER,
+    FOOTER_H,
+    FRAMEBUFFER,
+    HEADER_H,
+    IS_PI,
+    MAX_GAIN,
+    PANEL_BG,
+    SCREEN_H,
+    SCREEN_W,
+    SCROLL_BAR_W,
+    SLIDER_BG,
+    SLIDER_FILL,
+    SLIDER_KNOB,
+    SOUNDFONT_DIR,
+    STATE_FILE,
+    STATUS_ERR,
+    STATUS_OK,
+    TEXT_ACTIVE,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
     TOUCH_DEVICE,
 )
 from synth_client import FluidSynthController
-
 
 LIST_TOP = HEADER_H
 LIST_BOTTOM = SCREEN_H - FOOTER_H
@@ -91,8 +112,6 @@ class VoiceSwitcherUI:
         self.slider_rect = pygame.Rect(0, 0, 0, 0)
 
         self.synth = FluidSynthController()
-
-        self._load_state()
 
     def _load_state(self):
         """Restore last selected SoundFont."""
@@ -190,11 +209,13 @@ class VoiceSwitcherUI:
                 self.scroll_offset / max_scroll * (VISIBLE_AREA_H - bar_h)
             )
             pygame.draw.rect(
-                self.screen, SLIDER_BG,
+                self.screen,
+                SLIDER_BG,
                 (bar_x, LIST_TOP, SCROLL_BAR_W, VISIBLE_AREA_H),
             )
             pygame.draw.rect(
-                self.screen, SLIDER_FILL,
+                self.screen,
+                SLIDER_FILL,
                 (bar_x, bar_y, SCROLL_BAR_W, bar_h),
                 border_radius=4,
             )
@@ -247,6 +268,14 @@ class VoiceSwitcherUI:
         """Main event loop."""
         clock = pygame.time.Clock()
         finger_moved = False
+
+        # Draw one frame before blocking on state load so the screen isn't blank.
+        self.screen.fill(BG)
+        self._draw_header()
+        self._draw_voice_list()
+        self._draw_footer()
+        pygame.display.flip()
+        self._load_state()
 
         while self.running:
             for event in pygame.event.get():
