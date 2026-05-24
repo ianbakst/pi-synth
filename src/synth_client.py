@@ -94,41 +94,26 @@ class FluidSynthConnection:
 
 class FluidSynthClient:
     """
-    Persistent FluidSynth client that reconnects automatically on failure.
-    Holds one FluidSynthConnection and re-opens it if a command fails.
+    Stateless FluidSynth client. Opens a fresh connection per command.
+
+    FluidSynth's TCP shell handles one connection at a time. Holding a
+    persistent connection blocks every other caller. One-shot connections
+    avoid this entirely and require no reconnect logic.
     """
 
     def __init__(self, host=HOST, port=PORT, timeout=DEFAULT_TIMEOUT):
         self.host = host
         self.port = port
         self.timeout = timeout
-        self._conn = None
-
-    def _connection(self):
-        if self._conn is None:
-            conn = FluidSynthConnection(self.host, self.port, self.timeout)
-            conn.open()
-            self._conn = conn
-        return self._conn
-
-    def _drop(self):
-        if self._conn:
-            self._conn.close()
-            self._conn = None
 
     def send(self, cmd, timeout=None):
-        """Send a command, reconnecting once if the connection is broken."""
-        for attempt in range(2):
-            try:
-                return self._connection().send(cmd, timeout=timeout)
-            except Exception as e:
-                logger.warning("Command %r failed (attempt %d): %s", cmd, attempt + 1, e)
-                self._drop()
-        logger.error("Command %r failed after retry, giving up", cmd)
-        return None
-
-    def close(self):
-        self._drop()
+        """Open a connection, send one command, close, return response."""
+        try:
+            with FluidSynthConnection(self.host, self.port, self.timeout) as conn:
+                return conn.send(cmd, timeout=timeout)
+        except Exception as e:
+            logger.error("Command %r failed: %s", cmd, e)
+            return None
 
 
 if __name__ == "__main__":
@@ -157,4 +142,3 @@ if __name__ == "__main__":
         print("\n--- reset ---")
         print(client.send("reset"))
 
-    client.close()
