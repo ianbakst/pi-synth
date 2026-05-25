@@ -45,14 +45,17 @@ class FluidSynthController:
         raw = self._socket.send((cmd + "\n").encode(), first_timeout=timeout)
         return raw.decode() if raw else None
 
+    def _fire(self, cmd: str) -> None:
+        self._socket.fire((cmd + "\n").encode())
+
     def load_soundfont(self, path: str, load_timeout: float | None = None) -> bool:
         """Load a soundfont file and select it on MIDI channel 0."""
         t = self.load_timeout if load_timeout is None else load_timeout
         if self._command(f"load {path}", timeout=t) is None:
             logger.error("Failed to load soundfont: %s", path)
             return False
-        self._command("select 0 1 0 0")
-        self._command("reset")
+        self._fire("select 0 1 0 0")
+        self._fire("reset")
         logger.info("Loaded soundfont: %s", path)
         return True
 
@@ -64,7 +67,7 @@ class FluidSynthController:
 
     def set_gain(self, gain: float) -> None:
         """Set the master gain (0.0–5.0)."""
-        self._command(f"gain {gain:.2f}")
+        self._fire(f"gain {gain:.2f}")
         logger.info("Gain set to %.2f", gain)
 
     def list_fonts(self) -> str | None:

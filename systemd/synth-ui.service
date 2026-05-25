@@ -7,7 +7,7 @@ Requires=fluidsynth-engine.service
 Type=simple
 User=synth
 WorkingDirectory=/home/synth/synth/src
-ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 main.py
+ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 -m synth_ui.main
 Restart=always
 RestartSec=2
 Environment=SDL_FBDEV=/dev/fb0

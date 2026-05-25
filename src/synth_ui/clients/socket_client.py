@@ -45,6 +45,11 @@ class SocketClient:
             sock.close()
             logger.debug("Disconnected from %s:%d", self.host, self.port)
 
+    def fire(self, data: bytes) -> None:
+        """Send data and close immediately without reading a response."""
+        with self.connect() as sock:
+            sock.sendall(data)
+
     def send(self, data: bytes, first_timeout: float | None = None) -> bytes:
         """Send data and read the response, all on one connection. Returns raw bytes."""
         t = first_timeout if first_timeout is not None else self.first_timeout
