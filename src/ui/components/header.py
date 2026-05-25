@@ -2,7 +2,7 @@ import pygame
 
 from config import DIVIDER, PANEL_BG, TEXT_ACTIVE, TEXT_SECONDARY
 
-from .component import Component
+from .base import Component
 
 
 class Header(Component):

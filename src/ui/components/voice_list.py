@@ -17,8 +17,9 @@ from config import (
     TEXT_SECONDARY,
 )
 
-from .component import Component
-from .utils import display_name, file_size_str
+from .base import Component
+from ..event import UIEvent
+from ..utils import display_name, file_size_str
 
 
 class VoiceList(Component):
@@ -115,34 +116,30 @@ class VoiceList(Component):
         if 0 <= index < len(self.soundfonts) and index != self.selected_index:
             self.on_select(index, self.soundfonts[index])
 
-    def handle_event(self, event: pygame.event.Event) -> bool:
+    def handle_event(self, event: UIEvent) -> bool:
         if event.type == pygame.FINGERDOWN:
-            x, y = self._finger_pos(event)
-            if self.rect.collidepoint(x, y):
+            if self.rect.collidepoint(event.pos):
                 self._tracking_touch = True
                 self._finger_moved = False
 
         elif event.type == pygame.FINGERMOTION:
             if self._tracking_touch:
-                dy = self._finger_dy(event)
-                if abs(dy) > 2:
+                if abs(event.dy) > 2:
                     self._finger_moved = True
-                    self.scroll_offset -= int(dy)
+                    self.scroll_offset -= event.dy
 
         elif event.type == pygame.FINGERUP:
-            x, y = self._finger_pos(event)
             if self._tracking_touch:
-                if not self._finger_moved and self.rect.collidepoint(x, y):
-                    self._tap(x, y)
+                if not self._finger_moved and self.rect.collidepoint(event.pos):
+                    self._tap(*event.pos)
                 self._tracking_touch = False
                 self._finger_moved = False
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            x, y = event.pos
-            if self.rect.collidepoint(x, y):
-                self._tap(x, y)
+            if self.rect.collidepoint(event.pos):
+                self._tap(*event.pos)
 
         elif event.type == pygame.MOUSEWHEEL:
-            self.scroll_offset -= event.y * 40
+            self.scroll_offset -= event.dy
 
         return False
