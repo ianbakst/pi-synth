@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 from pygame import Rect, Surface
 
-from src.ui.event import UIEvent
+from src.synth_ui.ui.event import UIEvent
 
 
 class Component(ABC):

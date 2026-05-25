@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from socket import AF_INET, SOCK_STREAM, socket
 from typing import Callable, Generator
 
-from src.clients.constants import (
+from src.synth_ui.clients.constants import (
     DEFAULT_PORT,
     FIRST_TIMEOUT,
     LOCALHOST,

@@ -1,10 +1,10 @@
 import pygame
 
-from config import BG, FRAMEBUFFER, IS_PI, SCREEN_H, SCREEN_W, TOUCH_DEVICE
-from src.clients import FluidSynthController
-from src.ui.event import UIEvent
-from src.ui.screens.base import Screen
-from src.ui.screens.home import HomeScreen
+from src.synth_ui.config import BG, FRAMEBUFFER, IS_PI, SCREEN_H, SCREEN_W, TOUCH_DEVICE
+from src.synth_ui.clients import FluidSynthController
+from src.synth_ui.ui.event import UIEvent
+from src.synth_ui.ui.screens.base import Screen
+from src.synth_ui.ui.screens.home import HomeScreen
 
 
 class VoiceSwitcherUI:

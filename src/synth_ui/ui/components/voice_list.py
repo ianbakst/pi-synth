@@ -2,7 +2,7 @@ from typing import Callable
 
 import pygame
 
-from config import (
+from src.synth_ui.config import (
     BG,
     BTN_ACTIVE,
     BTN_H,

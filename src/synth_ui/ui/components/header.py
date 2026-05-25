@@ -1,6 +1,6 @@
 import pygame
 
-from config import DIVIDER, PANEL_BG, TEXT_ACTIVE, TEXT_SECONDARY
+from src.synth_ui.config import DIVIDER, PANEL_BG, TEXT_ACTIVE, TEXT_SECONDARY
 
 from .base import Component
 
