@@ -10,14 +10,14 @@ Protocol (discovered empirically):
 import logging
 import sys
 
-from src.synth_ui.clients.constants import (
+from synth_ui.clients.constants import (
     DEFAULT_PORT,
     FIRST_TIMEOUT,
     LOAD_TIMEOUT,
     LOCALHOST,
     SILENCE_TIMEOUT,
 )
-from src.synth_ui.clients.socket_client import SocketClient
+from synth_ui.clients.socket_client import SocketClient
 
 logger = logging.getLogger(__name__)
 

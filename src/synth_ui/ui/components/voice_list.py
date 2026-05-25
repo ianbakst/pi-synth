@@ -2,7 +2,7 @@ from typing import Callable
 
 import pygame
 
-from src.synth_ui.config import (
+from synth_ui.config import (
     BG,
     BTN_ACTIVE,
     BTN_H,
@@ -17,9 +17,9 @@ from src.synth_ui.config import (
     TEXT_SECONDARY,
 )
 
-from .base import Component
-from ..event import UIEvent
-from ..utils import display_name, file_size_str
+from synth_ui.ui.components.base import Component
+from synth_ui.ui.event import UIEvent
+from synth_ui.ui.utils import display_name, file_size_str
 
 
 class VoiceList(Component):

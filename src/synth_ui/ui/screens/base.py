@@ -1,7 +1,7 @@
 from pygame.surface import Surface
 
-from src.synth_ui.ui.components.base import Component
-from src.synth_ui.ui.event import UIEvent
+from synth_ui.ui.components.base import Component
+from synth_ui.ui.event import UIEvent
 
 
 class Screen:

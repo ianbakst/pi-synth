@@ -5,7 +5,7 @@ from pygame import Rect
 from pygame.font import Font
 from pygame.surface import Surface
 
-from src.synth_ui.config import (
+from synth_ui.config import (
     DIVIDER,
     PANEL_BG,
     SLIDER_BG,
@@ -15,8 +15,8 @@ from src.synth_ui.config import (
     TEXT_SECONDARY,
 )
 
-from src.synth_ui.ui.components.base import Component
-from src.synth_ui.ui.event import UIEvent
+from synth_ui.ui.components.base import Component
+from synth_ui.ui.event import UIEvent
 
 
 class Slider(Component):

@@ -9,8 +9,8 @@ import sys
 
 import pygame
 
-from src.synth_ui.config import SOUNDFONT_DIR
-from src.synth_ui.ui import VoiceSwitcherUI
+from synth_ui.config import SOUNDFONT_DIR
+from synth_ui.ui import VoiceSwitcherUI
 
 
 def main():

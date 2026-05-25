@@ -3,7 +3,7 @@ import threading
 
 import pygame
 
-from src.synth_ui.config import (
+from synth_ui.config import (
     DEFAULT_GAIN,
     FOOTER_H,
     HEADER_H,
@@ -13,12 +13,12 @@ from src.synth_ui.config import (
     SOUNDFONT_DIR,
     STATE_FILE,
 )
-from src.synth_ui.clients import FluidSynthController
-from src.synth_ui.ui.components.header import Header
-from src.synth_ui.ui.components.slider.slider import Slider
-from src.synth_ui.ui.components.voice_list import VoiceList
-from src.synth_ui.ui.screens.base import Screen
-from src.synth_ui.ui.utils import display_name, scan_soundfonts
+from synth_ui.clients import FluidSynthController
+from synth_ui.ui.components.header import Header
+from synth_ui.ui.components.slider.slider import Slider
+from synth_ui.ui.components.voice_list import VoiceList
+from synth_ui.ui.screens.base import Screen
+from synth_ui.ui.utils import display_name, scan_soundfonts
 
 
 class HomeScreen(Screen):

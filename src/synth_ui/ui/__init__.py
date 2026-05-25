@@ -1,3 +1,3 @@
-from .app import VoiceSwitcherUI
+from synth_ui.ui.app import VoiceSwitcherUI
 
 __all__ = ["VoiceSwitcherUI"]

@@ -15,7 +15,7 @@ import threading
 
 import pygame
 
-from src.synth_ui.config import (
+from synth_ui.config import (
     BG,
     BTN_ACTIVE,
     BTN_H,
@@ -43,7 +43,7 @@ from src.synth_ui.config import (
     TEXT_SECONDARY,
     TOUCH_DEVICE,
 )
-from src.synth_ui.clients import FluidSynthController
+from synth_ui.clients import FluidSynthController
 
 LIST_TOP = HEADER_H
 LIST_BOTTOM = SCREEN_H - FOOTER_H
