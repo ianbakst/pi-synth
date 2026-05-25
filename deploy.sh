@@ -12,6 +12,7 @@ rsync -avz --delete \
     ./ "$PI:$PROJECT/"
 
 ssh "$PI" "sudo apt-get update -qq && xargs sudo apt-get install -y -qq < $PROJECT/apt-requirements.txt"
+ssh "$PI" "cd $PROJECT && pip install -e . --quiet"
 ssh "$PI" "cd $PROJECT && python3 -m pytest tests/ -v && echo 'ALL TESTS PASSED'"
 ssh "$PI" "sudo systemctl restart synth-ui.service"
 echo "Deploy complete."
