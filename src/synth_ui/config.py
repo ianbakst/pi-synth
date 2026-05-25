@@ -11,6 +11,8 @@ IS_PI = os.path.exists("/sys/firmware/devicetree/base/model")
 # --- Paths ---
 SOUNDFONT_DIR = os.path.expanduser("~/soundfonts")
 STATE_FILE = os.path.expanduser("~/.synth-state")
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+IMAGES_DIR = os.path.join(ASSETS_DIR, "images")
 
 # --- FluidSynth TCP connection ---
 FLUIDSYNTH_HOST = "127.0.0.1"
