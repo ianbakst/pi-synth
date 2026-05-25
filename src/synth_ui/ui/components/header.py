@@ -1,6 +1,6 @@
 import pygame
 
-from synth_ui.config import DIVIDER, PANEL_BG, TEXT_ACTIVE, TEXT_SECONDARY
+from synth_ui.config import DIVIDER, PANEL_BG, STATUS_ERR, TEXT_ACTIVE, TEXT_SECONDARY
 
 from .base import Component
 
@@ -11,6 +11,7 @@ class Header(Component):
         self.font = font
         self.name: str | None = None
         self.loading: bool = False
+        self.error: bool = False
 
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.rect(surface, PANEL_BG, self.rect)
@@ -22,7 +23,12 @@ class Header(Component):
         )
 
         name = self.name or "No voice selected"
-        color = TEXT_SECONDARY if (not self.name or self.loading) else TEXT_ACTIVE
+        if self.loading:
+            color = TEXT_SECONDARY
+        elif self.error:
+            color = STATUS_ERR
+        else:
+            color = TEXT_ACTIVE if self.name else TEXT_SECONDARY
 
         text = self.font.render(name, True, color)
         max_w = self.rect.width - 50

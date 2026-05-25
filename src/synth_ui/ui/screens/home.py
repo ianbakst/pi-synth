@@ -56,6 +56,8 @@ class HomeScreen(Screen):
     def _set_loading(self, loading: bool) -> None:
         self.header.loading = loading
         self.voice_list.loading = loading
+        if loading:
+            self.header.error = False
 
     def _on_voice_select(self, index: int, path: str) -> None:
         self.voice_list.selected_index = index
@@ -66,7 +68,8 @@ class HomeScreen(Screen):
 
     def _do_load(self, path: str) -> None:
         try:
-            self.synth.load_soundfont(path)
+            ok = self.synth.load_soundfont(path)
+            self.header.error = not ok
         finally:
             self._set_loading(False)
 
