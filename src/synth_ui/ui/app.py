@@ -1,3 +1,5 @@
+import os
+
 import pygame
 
 from synth_ui.config import BG, FRAMEBUFFER, IS_PI, SCREEN_H, SCREEN_W, TOUCH_DEVICE
@@ -5,12 +7,14 @@ from synth_ui.clients import FluidSynthController
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
 from synth_ui.ui.screens.home import HomeScreen
+from synth_ui.ui.screens.splash import SplashScreen
+
+SPLASH_DURATION_MS = 5000
 
 
 class VoiceSwitcherUI:
     def __init__(self):
         if IS_PI:
-            import os
             os.environ["SDL_FBDEV"] = FRAMEBUFFER
             os.environ["SDL_MOUSEDEV"] = TOUCH_DEVICE
             os.environ["SDL_MOUSEDRV"] = "TSLIB"
@@ -26,7 +30,9 @@ class VoiceSwitcherUI:
         pygame.display.set_caption("MIDI Instrument")
 
         synth = FluidSynthController()
-        self.screen: Screen = HomeScreen(synth)
+        self._home: Screen = HomeScreen(synth)
+        self.screen: Screen = SplashScreen()
+        self._splash_start = pygame.time.get_ticks()
 
     def _to_ui_event(self, event: pygame.event.Event) -> UIEvent | None:
         match event.type:
@@ -52,6 +58,10 @@ class VoiceSwitcherUI:
                         return
                     if event := self._to_ui_event(raw):
                         self.screen.handle_event(event)
+
+                if self.screen is not self._home:
+                    if pygame.time.get_ticks() - self._splash_start >= SPLASH_DURATION_MS:
+                        self.screen = self._home
 
                 self.display.fill(BG)
                 self.screen.draw(self.display)

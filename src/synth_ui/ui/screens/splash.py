@@ -10,7 +10,7 @@ from synth_ui.ui.screens.base import Screen
 class SplashScreen(Screen):
     components = ()
 
-    def __init__(self, image_name: str = "splash.png"):
+    def __init__(self, image_name: str = "splash.jpg"):
         path = os.path.join(IMAGES_DIR, image_name)
         raw = pygame.image.load(path).convert_alpha()
         self._image = pygame.transform.smoothscale(raw, (SCREEN_W, SCREEN_H))

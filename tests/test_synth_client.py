@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, "src")
 
-from synth_client import FluidSynthClient, FluidSynthController
+from synth_ui.clients.synth_client import FluidSynthController
 
 
 class TestFluidSynthClient(unittest.TestCase):
