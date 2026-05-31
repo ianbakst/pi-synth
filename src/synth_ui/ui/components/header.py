@@ -10,8 +10,13 @@ class Header(Component):
         super().__init__(rect)
         self.font = font
         self.name: str | None = None
-        self.loading: bool = False
         self.error: bool = False
+
+    @Component.loading.setter
+    def loading(self, value: bool) -> None:
+        if value:
+            self.error = False
+        self._loading = value
 
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.rect(surface, PANEL_BG, self.rect)

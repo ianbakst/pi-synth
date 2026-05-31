@@ -2,7 +2,7 @@ import os
 
 import pygame
 
-from synth_ui.config import BG, FRAMEBUFFER, IS_PI, SCREEN_H, SCREEN_W, TOUCH_DEVICE
+from synth_ui.config import BG, FRAMEBUFFER, IS_PI, SCREEN_H, SCREEN_W, STATE_FILE, TOUCH_DEVICE
 from synth_ui.clients import FluidSynthController
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
@@ -12,7 +12,23 @@ from synth_ui.ui.screens.splash import SplashScreen
 SPLASH_DURATION_MS = 5000
 
 
-class VoiceSwitcherUI:
+def _load_state() -> str | None:
+    try:
+        with open(STATE_FILE) as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def _save_state(path: str) -> None:
+    try:
+        with open(STATE_FILE, "w") as f:
+            f.write(path)
+    except Exception:
+        pass
+
+
+class SynthUI:
     def __init__(self):
         if IS_PI:
             os.environ["SDL_FBDEV"] = FRAMEBUFFER
@@ -30,7 +46,12 @@ class VoiceSwitcherUI:
         pygame.display.set_caption("MIDI Instrument")
 
         synth = FluidSynthController()
-        self._home: Screen = HomeScreen(synth)
+        self._home: Screen = HomeScreen(
+            on_load_soundfont=synth.load_soundfont,
+            on_gain_change=synth.set_gain,
+            on_save=_save_state,
+            initial_path=_load_state(),
+        )
         self.screen: Screen = SplashScreen()
         self._splash_start = pygame.time.get_ticks()
 
@@ -68,4 +89,5 @@ class VoiceSwitcherUI:
                 pygame.display.flip()
                 clock.tick(30)
         finally:
+            self._home.save()
             pygame.quit()

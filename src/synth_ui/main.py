@@ -10,12 +10,12 @@ import sys
 import pygame
 
 from synth_ui.config import SOUNDFONT_DIR
-from synth_ui.ui import VoiceSwitcherUI
+from synth_ui.ui import SynthUI
 
 
 def main():
     os.makedirs(SOUNDFONT_DIR, exist_ok=True)
-    ui = VoiceSwitcherUI()
+    ui = SynthUI()
     try:
         ui.run()
     except KeyboardInterrupt:

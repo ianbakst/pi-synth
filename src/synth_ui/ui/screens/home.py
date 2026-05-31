@@ -1,5 +1,5 @@
-import os
 import threading
+from collections.abc import Callable
 
 import pygame
 
@@ -11,9 +11,7 @@ from synth_ui.config import (
     SCREEN_H,
     SCREEN_W,
     SOUNDFONT_DIR,
-    STATE_FILE,
 )
-from synth_ui.clients import FluidSynthController
 from synth_ui.ui.components.header import Header
 from synth_ui.ui.components.slider.slider import Slider
 from synth_ui.ui.components.voice_list import VoiceList
@@ -22,8 +20,16 @@ from synth_ui.ui.utils import display_name, scan_soundfonts
 
 
 class HomeScreen(Screen):
-    def __init__(self, synth: FluidSynthController):
-        self.synth = synth
+    def __init__(
+        self,
+        on_load_soundfont: Callable[[str], bool],
+        on_gain_change: Callable[[float], None],
+        on_save: Callable[[str], None],
+        initial_path: str | None = None,
+    ):
+        self._on_load_soundfont = on_load_soundfont
+        self._on_save = on_save
+        self._selected_path: str | None = None
 
         font_large = pygame.font.Font(None, 36)
         font_medium = pygame.font.Font(None, 28)
@@ -43,56 +49,44 @@ class HomeScreen(Screen):
         self.volume_slider = Slider(
             rect=pygame.Rect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H),
             initial_value=DEFAULT_GAIN,
-            on_change=self.synth.set_gain,
+            on_change=on_gain_change,
             min_value=0.0,
             max_value=MAX_GAIN,
             label="Volume",
             font=font_small,
         )
-
         self.components = (self.header, self.voice_list, self.volume_slider)
-        threading.Thread(target=self._load_state, daemon=True).start()
 
-    def _set_loading(self, loading: bool) -> None:
-        self.header.loading = loading
-        self.voice_list.loading = loading
-        if loading:
-            self.header.error = False
+        if initial_path is not None:
+            threading.Thread(target=self._restore, args=(initial_path,), daemon=True).start()
 
     def _on_voice_select(self, index: int, path: str) -> None:
+        self._selected_path = path
         self.voice_list.selected_index = index
         self.header.name = display_name(path)
-        self._save_state(path)
-        self._set_loading(True)
+        self.set_loading(True)
         threading.Thread(target=self._do_load, args=(path,), daemon=True).start()
 
     def _do_load(self, path: str) -> None:
         try:
-            ok = self.synth.load_soundfont(path)
+            ok = self._on_load_soundfont(path)
             self.header.error = not ok
         finally:
-            self._set_loading(False)
+            self.set_loading(False)
 
-    def _load_state(self) -> None:
-        if not os.path.exists(STATE_FILE):
+    def _restore(self, path: str) -> None:
+        if path not in self.voice_list.soundfonts:
             return
+        index = self.voice_list.soundfonts.index(path)
+        self.voice_list.selected_index = index
+        self.header.name = display_name(path)
+        self._selected_path = path
+        self.set_loading(True)
         try:
-            with open(STATE_FILE) as f:
-                path = f.read().strip()
-            if path in self.voice_list.soundfonts:
-                index = self.voice_list.soundfonts.index(path)
-                self.voice_list.selected_index = index
-                self.header.name = display_name(path)
-                self._set_loading(True)
-                self.synth.load_soundfont(path)
-        except Exception:
-            pass
+            self._on_load_soundfont(path)
         finally:
-            self._set_loading(False)
+            self.set_loading(False)
 
-    def _save_state(self, path: str) -> None:
-        try:
-            with open(STATE_FILE, "w") as f:
-                f.write(path)
-        except Exception:
-            pass
+    def save(self) -> None:
+        if self._selected_path is not None:
+            self._on_save(self._selected_path)

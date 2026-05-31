@@ -14,3 +14,10 @@ class Screen:
     def handle_event(self, event: UIEvent) -> None:
         for component in self.components:
             component.handle_event(event)
+
+    def set_loading(self, loading: bool) -> None:
+        for component in self.components:
+            component.loading = loading
+
+    def save(self) -> None:
+        pass
