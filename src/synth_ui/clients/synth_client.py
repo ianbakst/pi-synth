@@ -9,6 +9,7 @@ Protocol (discovered empirically):
 
 import logging
 import sys
+from dataclasses import dataclass
 
 from synth_ui.clients.constants import (
     DEFAULT_PORT,
@@ -20,6 +21,13 @@ from synth_ui.clients.constants import (
 from synth_ui.clients.socket_client import SocketClient
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Preset:
+    bank: int
+    prog: int
+    name: str
 
 
 class FluidSynthController:
@@ -62,6 +70,26 @@ class FluidSynthController:
         """Set the master gain (0.0–5.0)."""
         self._socket.fire_command(f"gain {gain:.2f}")
         logger.info("Gain set to %.2f", gain)
+
+    def list_presets(self, sfont_id: int = 1) -> list[Preset]:
+        """List all presets in a loaded SoundFont. FluidSynth outputs 'BBB-PPP Name' lines."""
+        raw = self._socket.send_command(f"inst {sfont_id}")
+        if not raw:
+            return []
+        presets = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2 or "-" not in parts[0]:
+                continue
+            try:
+                bank_str, prog_str = parts[0].split("-", 1)
+                presets.append(Preset(bank=int(bank_str), prog=int(prog_str), name=parts[1].strip()))
+            except ValueError:
+                continue
+        return presets
 
     def list_fonts(self) -> str | None:
         """Return the list of loaded soundfonts, or None if unreachable."""

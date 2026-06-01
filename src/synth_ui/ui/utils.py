@@ -1,3 +1,4 @@
+import getpass
 import glob
 import os
 
@@ -6,6 +7,32 @@ def scan_soundfonts(directory: str) -> list[str]:
     fonts = []
     for ext in ("*.sf2", "*.SF2", "*.sf3", "*.SF3"):
         fonts.extend(glob.glob(os.path.join(directory, "**", ext), recursive=True))
+    fonts.sort(key=lambda f: os.path.basename(f).lower())
+    return fonts
+
+
+def scan_usb_soundfonts(exclude_dir: str) -> list[str]:
+    """Find SF2/SF3 files on mounted USB drives, excluding the local library."""
+    exclude_real = os.path.realpath(exclude_dir)
+    search_roots = [
+        f"/media/{getpass.getuser()}",
+        "/media",
+        "/mnt",
+    ]
+    seen: set[str] = set()
+    fonts: list[str] = []
+    for root in search_roots:
+        if not os.path.isdir(root):
+            continue
+        for ext in ("*.sf2", "*.SF2", "*.sf3", "*.SF3"):
+            for path in glob.glob(os.path.join(root, "**", ext), recursive=True):
+                real = os.path.realpath(path)
+                if real in seen:
+                    continue
+                if real.startswith(exclude_real):
+                    continue
+                seen.add(real)
+                fonts.append(path)
     fonts.sort(key=lambda f: os.path.basename(f).lower())
     return fonts
 

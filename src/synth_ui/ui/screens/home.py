@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 import pygame
 
+from synth_ui.clients import Preset
 from synth_ui.config import (
     DEFAULT_GAIN,
     FOOTER_H,
@@ -23,11 +24,17 @@ class HomeScreen(Screen):
     def __init__(
         self,
         on_load_soundfont: Callable[[str], bool],
+        on_list_presets: Callable[[], list[Preset]],
+        on_navigate: Callable[[str, list[Preset]], None],
         on_gain_change: Callable[[float], None],
         on_save: Callable[[str], None],
+        on_usb: Callable,
         initial_path: str | None = None,
+        initial_gain: float = DEFAULT_GAIN,
     ):
         self._on_load_soundfont = on_load_soundfont
+        self._on_list_presets = on_list_presets
+        self._on_navigate = on_navigate
         self._on_save = on_save
         self._selected_path: str | None = None
 
@@ -38,6 +45,8 @@ class HomeScreen(Screen):
         self.header = Header(
             rect=pygame.Rect(0, 0, SCREEN_W, HEADER_H),
             font=font_large,
+            action_label="USB",
+            on_action=on_usb,
         )
         self.voice_list = VoiceList(
             rect=pygame.Rect(0, HEADER_H, SCREEN_W, SCREEN_H - HEADER_H - FOOTER_H),
@@ -48,7 +57,7 @@ class HomeScreen(Screen):
         )
         self.volume_slider = Slider(
             rect=pygame.Rect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H),
-            initial_value=DEFAULT_GAIN,
+            initial_value=initial_gain,
             on_change=on_gain_change,
             min_value=0.0,
             max_value=MAX_GAIN,
@@ -71,6 +80,9 @@ class HomeScreen(Screen):
         try:
             ok = self._on_load_soundfont(path)
             self.header.error = not ok
+            if ok:
+                presets = self._on_list_presets()
+                self._on_navigate(path, presets)
         finally:
             self.set_loading(False)
 
@@ -86,6 +98,14 @@ class HomeScreen(Screen):
             self._on_load_soundfont(path)
         finally:
             self.set_loading(False)
+
+    def refresh(self) -> None:
+        """Re-scan the soundfont directory (e.g. after a USB copy)."""
+        self.voice_list.soundfonts = scan_soundfonts(SOUNDFONT_DIR)
+        if self._selected_path in self.voice_list.soundfonts:
+            self.voice_list.selected_index = self.voice_list.soundfonts.index(self._selected_path)
+        else:
+            self.voice_list.selected_index = -1
 
     def save(self) -> None:
         if self._selected_path is not None:

@@ -2,12 +2,15 @@ import os
 
 import pygame
 
-from synth_ui.config import BG, FRAMEBUFFER, IS_PI, SCREEN_H, SCREEN_W, STATE_FILE, TOUCH_DEVICE
-from synth_ui.clients import FluidSynthController
+from synth_ui.clients import FluidSynthController, Preset
+from synth_ui.config import BG, DEFAULT_GAIN, FRAMEBUFFER, IS_PI, MAX_GAIN, SCREEN_H, SCREEN_W, STATE_FILE, TOUCH_DEVICE
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
 from synth_ui.ui.screens.home import HomeScreen
+from synth_ui.ui.screens.preset import PresetScreen
 from synth_ui.ui.screens.splash import SplashScreen
+from synth_ui.ui.screens.usb import USBScreen
+from synth_ui.ui.utils import display_name
 
 SPLASH_DURATION_MS = 5000
 
@@ -45,15 +48,59 @@ class SynthUI:
 
         pygame.display.set_caption("MIDI Instrument")
 
-        synth = FluidSynthController()
-        self._home: Screen = HomeScreen(
-            on_load_soundfont=synth.load_soundfont,
-            on_gain_change=synth.set_gain,
+        self._synth = FluidSynthController()
+        self._gain: float = DEFAULT_GAIN
+        self._preset_screen: PresetScreen | None = None
+
+        self._home = HomeScreen(
+            on_load_soundfont=self._synth.load_soundfont,
+            on_list_presets=self._synth.list_presets,
+            on_navigate=self._show_preset_screen,
+            on_gain_change=self._on_gain_change,
             on_save=_save_state,
+            on_usb=self._show_usb_screen,
             initial_path=_load_state(),
+            initial_gain=self._gain,
         )
         self.screen: Screen = SplashScreen()
         self._splash_start = pygame.time.get_ticks()
+        self._splash_done = False
+
+    def _on_gain_change(self, gain: float) -> None:
+        self._gain = gain
+        self._synth.set_gain(gain)
+        if self._preset_screen is not None:
+            self._preset_screen.volume_slider.value = gain
+
+    def _show_preset_screen(self, path: str, presets: list[Preset]) -> None:
+        self._preset_screen = PresetScreen(
+            font_name=display_name(path),
+            presets=presets,
+            on_select=self._on_preset_selected,
+            on_back=self._show_home,
+            on_gain_change=self._on_gain_change,
+            initial_gain=self._gain,
+            max_gain=MAX_GAIN,
+        )
+        self.screen = self._preset_screen
+
+    def _on_preset_selected(self, preset: Preset) -> None:
+        self._synth.select_preset(0, 1, preset.bank, preset.prog)
+        self._home.header.name = preset.name
+        if self._preset_screen is not None:
+            self._preset_screen.set_selected(preset)
+
+    def _show_home(self) -> None:
+        self.screen = self._home
+
+    def _show_usb_screen(self) -> None:
+        self.screen = USBScreen(
+            on_back=self._show_home,
+            on_copy_complete=self._on_usb_copy_complete,
+        )
+
+    def _on_usb_copy_complete(self) -> None:
+        self._home.refresh()
 
     def _to_ui_event(self, event: pygame.event.Event) -> UIEvent | None:
         match event.type:
@@ -80,9 +127,10 @@ class SynthUI:
                     if event := self._to_ui_event(raw):
                         self.screen.handle_event(event)
 
-                if self.screen is not self._home:
+                if not self._splash_done:
                     if pygame.time.get_ticks() - self._splash_start >= SPLASH_DURATION_MS:
                         self.screen = self._home
+                        self._splash_done = True
 
                 self.display.fill(BG)
                 self.screen.draw(self.display)
