@@ -1,6 +1,10 @@
 python3-pygame
 fluidsynth
 jackd2
-mod-host
-sfizz
+jack-tools
 setbfree
+build-essential
+cmake
+libsndfile1-dev
+libjack-jackd2-dev
+liblilv-dev
