@@ -2,6 +2,8 @@ import getpass
 import glob
 import os
 
+from synth_ui.clients.voice import Voice, read_voices_manifest as _read_manifest
+
 
 def scan_soundfonts(directory: str) -> list[str]:
     fonts = []
@@ -9,6 +11,22 @@ def scan_soundfonts(directory: str) -> list[str]:
         fonts.extend(glob.glob(os.path.join(directory, "**", ext), recursive=True))
     fonts.sort(key=lambda f: os.path.basename(f).lower())
     return fonts
+
+
+def load_voices(manifest_path: str, soundfont_dir: str) -> list[Voice]:
+    """Return voices from manifest, falling back to soundfont directory scan."""
+    voices = _read_manifest(manifest_path)
+    if voices:
+        return voices
+    # Fallback: treat every SF2/SF3 in soundfont_dir as a FluidSynth voice
+    for path in scan_soundfonts(soundfont_dir):
+        voices.append(Voice(
+            name=display_name(path),
+            engine="fluidsynth",
+            path=path,
+            category="General MIDI",
+        ))
+    return voices
 
 
 def scan_usb_soundfonts(exclude_dir: str) -> list[str]:

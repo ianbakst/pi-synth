@@ -1,7 +1,8 @@
-from typing import Callable
+from collections.abc import Callable
 
 import pygame
 
+from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
     BTN_ACTIVE,
@@ -19,20 +20,19 @@ from synth_ui.config import (
 
 from synth_ui.ui.components.base import Component
 from synth_ui.ui.event import UIEvent
-from synth_ui.ui.utils import display_name, file_size_str
 
 
 class VoiceList(Component):
     def __init__(
         self,
         rect: pygame.Rect,
-        soundfonts: list[str],
+        voices: list[Voice],
         font_medium: pygame.font.Font,
         font_small: pygame.font.Font,
-        on_select: Callable[[int, str], None],
+        on_select: Callable[[int, Voice], None],
     ):
         super().__init__(rect)
-        self.soundfonts = soundfonts
+        self.voices = voices
         self.font_medium = font_medium
         self.font_small = font_small
         self.on_select = on_select
@@ -53,20 +53,20 @@ class VoiceList(Component):
         )
         pygame.draw.rect(surface, BG, self.rect)
 
-        if not self.soundfonts:
+        if not self.voices:
             text = self.font_medium.render(
-                "No SoundFonts found in ~/soundfonts/", True, TEXT_SECONDARY
+                "No voices found. Add instruments to ~/instruments/voices.json", True, TEXT_SECONDARY
             )
             surface.blit(text, (self.rect.x + 20, self.rect.y + 20))
             return
 
-        total_h = len(self.soundfonts) * (BTN_H + BTN_MARGIN)
+        total_h = len(self.voices) * (BTN_H + BTN_MARGIN)
         max_scroll = max(0, total_h - self.rect.height)
         self.scroll_offset = max(0, min(self.scroll_offset, max_scroll))
 
         clip = surface.subsurface(list_rect)
 
-        for i, sf_path in enumerate(self.soundfonts):
+        for i, voice in enumerate(self.voices):
             btn_y = -self.scroll_offset + i * (BTN_H + BTN_MARGIN)
             if btn_y + BTN_H < 0 or btn_y > self.rect.height:
                 continue
@@ -77,7 +77,7 @@ class VoiceList(Component):
             )
             pygame.draw.rect(clip, color, btn_rect, border_radius=6)
 
-            name = display_name(sf_path)
+            name = voice.name
             text_color = TEXT_ACTIVE if i == self.selected_index else TEXT_PRIMARY
             text = self.font_medium.render(name, True, text_color)
             max_text_w = btn_rect.width - 100
@@ -87,10 +87,9 @@ class VoiceList(Component):
                     text = self.font_medium.render(name, True, text_color)
             clip.blit(text, (btn_rect.x + 12, btn_rect.y + 10))
 
-            size_text = self.font_small.render(
-                file_size_str(sf_path), True, TEXT_SECONDARY
-            )
-            clip.blit(size_text, (btn_rect.x + 12, btn_rect.y + 36))
+            sub = f"{voice.category}  ·  {voice.engine}" if voice.category else voice.engine
+            sub_text = self.font_small.render(sub, True, TEXT_SECONDARY)
+            clip.blit(sub_text, (btn_rect.x + 12, btn_rect.y + 36))
 
         if total_h > self.rect.height and max_scroll > 0:
             bar_x = self.rect.right - SCROLL_BAR_W
@@ -109,12 +108,12 @@ class VoiceList(Component):
             )
 
     def _tap(self, x: int, y: int) -> None:
-        if self.loading or not self.soundfonts:
+        if self.loading or not self.voices:
             return
         relative_y = y - self.rect.y + self.scroll_offset
         index = int(relative_y / (BTN_H + BTN_MARGIN))
-        if 0 <= index < len(self.soundfonts) and index != self.selected_index:
-            self.on_select(index, self.soundfonts[index])
+        if 0 <= index < len(self.voices) and index != self.selected_index:
+            self.on_select(index, self.voices[index])
 
     def handle_event(self, event: UIEvent) -> bool:
         if event.type == pygame.FINGERDOWN:

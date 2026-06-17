@@ -10,13 +10,19 @@ IS_PI = os.path.exists("/sys/firmware/devicetree/base/model")
 
 # --- Paths ---
 SOUNDFONT_DIR = os.path.expanduser("~/soundfonts")
+INSTRUMENTS_DIR = os.path.expanduser("~/instruments")
+VOICES_MANIFEST = os.path.join(INSTRUMENTS_DIR, "voices.json")
 STATE_FILE = os.path.expanduser("~/.synth-state")
+ENGINE_MANAGER_SCRIPT = os.path.expanduser("~/synth/scripts/engine-manager.sh")
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 IMAGES_DIR = os.path.join(ASSETS_DIR, "images")
 
 # --- FluidSynth TCP connection ---
 FLUIDSYNTH_HOST = "127.0.0.1"
 FLUIDSYNTH_PORT = 9800
+
+# --- mod-host TCP connection ---
+MOD_HOST_PORT = 5555
 
 # --- Display ---
 SCREEN_W = 800

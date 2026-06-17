@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Salamander Grand",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/piano/salamander/SalamanderGrandPianoV3.sfz",
+    "category": "Piano"
+  },
+  {
+    "name": "Piano in 162",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/piano/piano-in-162/piano-in-162.sfz",
+    "category": "Piano"
+  },
+  {
+    "name": "Hammond B3",
+    "engine": "setbfree",
+    "path": "",
+    "category": "Organ"
+  },
+  {
+    "name": "DX7 E.Piano",
+    "engine": "dexed",
+    "path": "/home/synth/instruments/dx7/rom1a.syx",
+    "category": "Electric Piano"
+  },
+  {
+    "name": "DX7 Bass",
+    "engine": "dexed",
+    "path": "/home/synth/instruments/dx7/rom1b.syx",
+    "category": "Electric Piano"
+  },
+  {
+    "name": "General MIDI",
+    "engine": "fluidsynth",
+    "path": "/home/synth/soundfonts/default.sf2",
+    "category": "General MIDI"
+  }
+]
