@@ -14,8 +14,8 @@ INSTRUMENT="$2"
 SCRIPTS_DIR="$(dirname "$0")"
 
 # --- Stop whatever is currently running ---
-systemctl stop fluidsynth-engine.service 2>/dev/null || true
-systemctl stop setbfree.service          2>/dev/null || true
+sudo systemctl stop fluidsynth-engine.service 2>/dev/null || true
+sudo systemctl stop setbfree.service          2>/dev/null || true
 killall -q -TERM pianoteq                2>/dev/null || true
 sleep 0.3
 killall -q -KILL pianoteq                2>/dev/null || true
@@ -23,13 +23,13 @@ killall -q -KILL pianoteq                2>/dev/null || true
 # --- Start the new engine ---
 case "$ENGINE" in
     fluidsynth)
-        systemctl start fluidsynth-engine.service
+        sudo systemctl start fluidsynth-engine.service
         ;;
     sfizz|dexed)
         # Loaded as LV2 via mod-host by the Python EngineManager — nothing to do here.
         ;;
     setbfree)
-        systemctl start setbfree.service
+        sudo systemctl start setbfree.service
         ;;
     pianoteq)
         chrt -f 80 taskset -c 2,3 \

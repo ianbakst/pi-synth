@@ -4,4 +4,3 @@ jackd2
 mod-host
 sfizz
 setbfree
-git-lfs

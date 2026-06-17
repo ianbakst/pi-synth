@@ -7,6 +7,8 @@ Type=simple
 User=synth
 ExecStart=/usr/bin/chrt -f 90 /usr/bin/taskset -c 2,3 \
     /usr/bin/jackd -d alsa -d hw:sndrpihifiberry -r 48000 -p 128 -n 2
+LimitRTPRIO=90
+LimitMEMLOCK=infinity
 Restart=always
 RestartSec=1
 
