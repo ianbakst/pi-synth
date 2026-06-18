@@ -1,7 +1,6 @@
 python3-pygame
 fluidsynth
 jackd2
-jack-tools
 setbfree
 build-essential
 cmake

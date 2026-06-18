@@ -6,8 +6,10 @@ Requires=jack.service
 [Service]
 Type=simple
 User=synth
+# /usr/local/lib/lv2 is where source-built sfizz/Dexed plugins install.
+Environment=LV2_PATH=/usr/lib/lv2:/usr/local/lib/lv2
 ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
-    /usr/bin/mod-host -n -p 5555
+    /usr/local/bin/mod-host -n -p 5555
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
 Restart=always
