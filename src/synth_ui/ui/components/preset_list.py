@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 import pygame
 
-from synth_ui.clients.voice import Voice
+from synth_ui.clients import Preset
 from synth_ui.config import (
     BG,
     BTN_ACTIVE,
@@ -17,68 +17,59 @@ from synth_ui.config import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
-
 from synth_ui.ui.components.base import Component
 from synth_ui.ui.event import UIEvent
 
 
-class VoiceList(Component):
+class PresetList(Component):
     def __init__(
         self,
         rect: pygame.Rect,
-        voices: list[Voice],
+        presets: list[Preset],
         font_medium: pygame.font.Font,
         font_small: pygame.font.Font,
-        on_select: Callable[[int, Voice], None],
+        on_select: Callable[[Preset], None],
     ):
         super().__init__(rect)
-        self.voices = voices
+        self.presets = presets
         self.font_medium = font_medium
         self.font_small = font_small
         self.on_select = on_select
 
         self.selected_index: int = -1
         self.scroll_offset: int = 0
-        self.loading: bool = False
 
         self._finger_moved: bool = False
         self._tracking_touch: bool = False
 
     def draw(self, surface: pygame.Surface) -> None:
         list_rect = pygame.Rect(
-            self.rect.x,
-            self.rect.y,
-            self.rect.width - SCROLL_BAR_W,
-            self.rect.height,
+            self.rect.x, self.rect.y, self.rect.width - SCROLL_BAR_W, self.rect.height
         )
         pygame.draw.rect(surface, BG, self.rect)
 
-        if not self.voices:
-            text = self.font_medium.render(
-                "No voices found. Add instruments to ~/instruments/voices.json", True, TEXT_SECONDARY
-            )
+        if not self.presets:
+            text = self.font_medium.render("No presets found", True, TEXT_SECONDARY)
             surface.blit(text, (self.rect.x + 20, self.rect.y + 20))
             return
 
-        total_h = len(self.voices) * (BTN_H + BTN_MARGIN)
+        total_h = len(self.presets) * (BTN_H + BTN_MARGIN)
         max_scroll = max(0, total_h - self.rect.height)
         self.scroll_offset = max(0, min(self.scroll_offset, max_scroll))
 
         clip = surface.subsurface(list_rect)
 
-        for i, voice in enumerate(self.voices):
+        for i, preset in enumerate(self.presets):
             btn_y = -self.scroll_offset + i * (BTN_H + BTN_MARGIN)
             if btn_y + BTN_H < 0 or btn_y > self.rect.height:
                 continue
 
             color = BTN_ACTIVE if i == self.selected_index else BTN_NORMAL
-            btn_rect = pygame.Rect(
-                BTN_PAD_X, btn_y, list_rect.width - BTN_PAD_X * 2, BTN_H
-            )
+            btn_rect = pygame.Rect(BTN_PAD_X, btn_y, list_rect.width - BTN_PAD_X * 2, BTN_H)
             pygame.draw.rect(clip, color, btn_rect, border_radius=6)
 
-            name = voice.name
             text_color = TEXT_ACTIVE if i == self.selected_index else TEXT_PRIMARY
+            name = preset.name
             text = self.font_medium.render(name, True, text_color)
             max_text_w = btn_rect.width - 100
             if text.get_width() > max_text_w:
@@ -87,7 +78,10 @@ class VoiceList(Component):
                     text = self.font_medium.render(name, True, text_color)
             clip.blit(text, (btn_rect.x + 12, btn_rect.y + 10))
 
-            sub = f"{voice.category}  ·  {voice.engine}" if voice.category else voice.engine
+            if preset.bank == 0:
+                sub = f"#{preset.prog}"
+            else:
+                sub = f"Bank {preset.bank}  #{preset.prog}"
             sub_text = self.font_small.render(sub, True, TEXT_SECONDARY)
             clip.blit(sub_text, (btn_rect.x + 12, btn_rect.y + 36))
 
@@ -97,23 +91,17 @@ class VoiceList(Component):
             bar_y = self.rect.y + int(
                 self.scroll_offset / max_scroll * (self.rect.height - bar_h)
             )
-            pygame.draw.rect(
-                surface, SLIDER_BG, (bar_x, self.rect.y, SCROLL_BAR_W, self.rect.height)
-            )
-            pygame.draw.rect(
-                surface,
-                SLIDER_FILL,
-                (bar_x, bar_y, SCROLL_BAR_W, bar_h),
-                border_radius=4,
-            )
+            pygame.draw.rect(surface, SLIDER_BG, (bar_x, self.rect.y, SCROLL_BAR_W, self.rect.height))
+            pygame.draw.rect(surface, SLIDER_FILL, (bar_x, bar_y, SCROLL_BAR_W, bar_h), border_radius=4)
 
     def _tap(self, x: int, y: int) -> None:
-        if self.loading or not self.voices:
+        if self.loading or not self.presets:
             return
         relative_y = y - self.rect.y + self.scroll_offset
         index = int(relative_y / (BTN_H + BTN_MARGIN))
-        if 0 <= index < len(self.voices) and index != self.selected_index:
-            self.on_select(index, self.voices[index])
+        if 0 <= index < len(self.presets):
+            self.selected_index = index
+            self.on_select(self.presets[index])
 
     def handle_event(self, event: UIEvent) -> bool:
         if event.type == pygame.FINGERDOWN:

@@ -1,27 +1,24 @@
 [Unit]
 Description=FluidSynth Audio Engine
-After=sound.target
+After=jack.service
+Requires=jack.service
 
 [Service]
 Type=simple
 User=synth
 ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
     /usr/bin/fluidsynth \
-    -a alsa \
-    -o audio.alsa.device=hw:sndrpihifiberry \
-    -o audio.period-size=128 \
-    -o audio.periods=2 \
+    -a jack \
+    -m jack \
     -o synth.sample-rate=48000 \
     -o synth.gain=2.0 \
     -o shell.port=9800 \
-    -m alsa_seq \
     -i \
     -s \
     /home/synth/soundfonts/default.sf2
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
-Restart=always
-RestartSec=1
+# Not restarted automatically — started/stopped on demand by engine-manager.sh
 
 [Install]
 WantedBy=multi-user.target

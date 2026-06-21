@@ -1,0 +1,13 @@
+[Unit]
+Description=setBfree Hammond B3 Organ Emulator
+After=jack.service
+Requires=jack.service
+
+[Service]
+Type=simple
+User=synth
+ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 /usr/bin/setBfree
+# Not enabled at boot — started on demand by engine-manager.sh
+
+[Install]
+WantedBy=multi-user.target

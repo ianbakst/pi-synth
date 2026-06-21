@@ -1,7 +1,7 @@
 [Unit]
 Description=MIDI Instrument UI
-After=fluidsynth-engine.service
-Requires=fluidsynth-engine.service
+After=jack.service mod-host.service
+Requires=jack.service mod-host.service
 
 [Service]
 Type=simple
