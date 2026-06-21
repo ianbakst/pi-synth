@@ -10,3 +10,11 @@ __pycache__/
 
 # Runtime state
 .synth-state
+
+
+# KiCad
+hardware/pcb/pi-audio-hat/.history
+*.kicad_prl
+*-backups/
+*.history/
+fp-info-cache

@@ -43,5 +43,7 @@ case "$ENGINE" in
 esac
 
 # --- Reconnect MIDI after engine starts ---
+# Non-fatal: a missing keyboard or MIDI-routing hiccup must NOT make the engine
+# switch report failure (the UI turns the voice red on any non-zero exit here).
 sleep 1.5
-bash "$SCRIPTS_DIR/midi-connect.sh"
+bash "$SCRIPTS_DIR/midi-connect.sh" || true
