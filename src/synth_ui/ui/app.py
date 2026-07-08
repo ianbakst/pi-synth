@@ -1,13 +1,19 @@
-import os
-
 import pygame
 
 from synth_ui.clients import EngineManager, Preset
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
-    BG, DEFAULT_GAIN, ENGINE_MANAGER_SCRIPT, FLUIDSYNTH_HOST, FLUIDSYNTH_PORT,
-    FRAMEBUFFER, IS_PI, MAX_GAIN, MOD_HOST_PORT, SCREEN_H, SCREEN_W,
-    STATE_FILE, TOUCH_DEVICE,
+    BG,
+    DEFAULT_GAIN,
+    ENGINE_MANAGER_SCRIPT,
+    FLUIDSYNTH_HOST,
+    FLUIDSYNTH_PORT,
+    IS_PI,
+    MAX_GAIN,
+    MOD_HOST_PORT,
+    SCREEN_H,
+    SCREEN_W,
+    STATE_FILE,
 )
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
@@ -37,11 +43,10 @@ def _save_state(name: str) -> None:
 
 class SynthUI:
     def __init__(self):
-        if IS_PI:
-            os.environ["SDL_FBDEV"] = FRAMEBUFFER
-            os.environ["SDL_MOUSEDEV"] = TOUCH_DEVICE
-            os.environ["SDL_MOUSEDRV"] = "TSLIB"
-
+        # No SDL env setup needed: pygame 2 is SDL2, which uses KMSDRM for video
+        # and auto-scans /dev/input/event* for touch. Touch works as long as this
+        # process's user is in the 'input' group (see setup.sh). The old SDL 1.2
+        # vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
         pygame.init()
 
         if IS_PI:

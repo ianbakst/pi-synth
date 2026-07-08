@@ -108,6 +108,11 @@ fi
 id -nG "$SYNTH_USER" | grep -qw audio && ok "User in 'audio' group" \
     || { sudo usermod -aG audio "$SYNTH_USER"; warn "Added $SYNTH_USER to 'audio' group — log out/in (or reboot) to take effect."; }
 
+# SDL2 reads the touchscreen via evdev; /dev/input/event* is root:input 0660,
+# so the UI user must be in 'input' or touch events never arrive.
+id -nG "$SYNTH_USER" | grep -qw input && ok "User in 'input' group" \
+    || { sudo usermod -aG input "$SYNTH_USER"; warn "Added $SYNTH_USER to 'input' group — log out/in (or reboot) to take effect."; }
+
 # ---------------------------------------------------------------------------
 # Step 2 — System packages
 # ---------------------------------------------------------------------------
@@ -371,17 +376,15 @@ step "Hardware checks"
 aplay -l 2>/dev/null | grep -qi hifiberry && ok "DAC: HiFiBerry present" \
     || warn "DAC: HiFiBerry not detected (ok if not wired up / before reboot)."
 
-# Touchscreen — event number can shift; config expects /dev/input/event4.
-if [ -e /dev/input/event4 ]; then
-    ok "Touchscreen: /dev/input/event4 present"
+# Touchscreen — SDL2 auto-scans all /dev/input/event* for touch devices, so the
+# event number is irrelevant. What matters is that the touch device exists and
+# the UI user can read it (see the 'input' group check above).
+FOUND=$(grep -lE 'ft5x06|EP0110|generic ft5x06' /sys/class/input/event*/device/name 2>/dev/null \
+    | sed 's|/sys/class/input/\(event[0-9]*\)/.*|\1|' | head -1)
+if [ -n "$FOUND" ]; then
+    ok "Touchscreen: ft5x06 present at /dev/input/$FOUND"
 else
-    FOUND=$(grep -lE 'ft5x06|EP0110|generic ft5x06' /sys/class/input/event*/device/name 2>/dev/null \
-        | sed 's|/sys/class/input/\(event[0-9]*\)/.*|\1|' | head -1)
-    if [ -n "$FOUND" ]; then
-        warn "Touchscreen is at /dev/input/$FOUND, not event4. Update TOUCH_DEVICE in config.py and SDL_MOUSEDEV in synth-ui.service."
-    else
-        warn "Touchscreen not found at /dev/input/event4 (ok before reboot / if not connected)."
-    fi
+    warn "Touchscreen (ft5x06) not found in /dev/input (ok before reboot / if not connected)."
 fi
 
 # Framebuffer

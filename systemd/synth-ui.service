@@ -10,9 +10,10 @@ WorkingDirectory=/home/synth/synth/src
 ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 -m synth_ui.main
 Restart=always
 RestartSec=2
-Environment=SDL_FBDEV=/dev/fb0
-Environment=SDL_MOUSEDEV=/dev/input/event4
-Environment=SDL_MOUSEDRV=TSLIB
+# NOTE: SDL_FBDEV / SDL_MOUSEDEV / SDL_MOUSEDRV are SDL 1.2 variables and are
+# ignored by SDL2 (pygame 2). SDL2 uses KMSDRM for video and auto-scans
+# /dev/input/event* for touch — the UI user just needs to be in the 'input'
+# group. Do not re-add them; they only create a false "event4" mental model.
 RuntimeDirectory=synth-ui
 Environment=XDG_RUNTIME_DIR=/run/synth-ui
 
