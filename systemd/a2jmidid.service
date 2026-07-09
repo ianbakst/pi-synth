@@ -1,0 +1,21 @@
+[Unit]
+Description=ALSA-to-JACK MIDI bridge (a2jmidid)
+# Bridges ALSA-seq hardware MIDI (USB keyboards) into JACK MIDI, which is what
+# every engine consumes (fluidsynth -m jack, setBfree, mod-host, pianoteq).
+# Bridged keyboards appear under the "a2j:" JACK client; midi-connect.sh wires
+# them to the active engine's MIDI input.
+After=jack.service
+Requires=jack.service
+PartOf=jack.service
+
+[Service]
+Type=simple
+User=synth
+# -e / --export-hw: export only physical (hardware) MIDI ports, not software
+# ALSA-seq clients like FluidSynth or Midi Through.
+ExecStart=/usr/bin/a2jmidid -e
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

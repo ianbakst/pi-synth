@@ -333,19 +333,20 @@ systemctl --user disable --now fluidsynth.service 2>/dev/null \
     && ok "Disabled default per-user fluidsynth.service" \
     || info "No conflicting user fluidsynth.service"
 
-for svc in cpu-performance jack mod-host fluidsynth-engine setbfree synth-ui; do
+for svc in cpu-performance jack a2jmidid mod-host fluidsynth-engine setbfree synth-ui; do
     sudo cp "$REPO_DIR/systemd/$svc.service" "/etc/systemd/system/$svc.service"
 done
-ok "Copied 6 service files to /etc/systemd/system"
+ok "Copied 7 service files to /etc/systemd/system"
 
 sudo systemctl daemon-reload
 ok "daemon-reload"
 
 # Always-on at boot. fluidsynth-engine + setbfree are on-demand (engine-manager.sh) — NOT enabled.
-for svc in cpu-performance jack mod-host synth-ui; do
+# a2jmidid must be always-on: it's the ALSA->JACK MIDI bridge every engine relies on.
+for svc in cpu-performance jack a2jmidid mod-host synth-ui; do
     sudo systemctl enable "$svc.service" >/dev/null 2>&1
 done
-ok "Enabled on boot: cpu-performance, jack, mod-host, synth-ui"
+ok "Enabled on boot: cpu-performance, jack, a2jmidid, mod-host, synth-ui"
 info "On-demand (not enabled): fluidsynth-engine, setbfree — started by the UI on voice select"
 
 if confirm "Start the services now?"; then
