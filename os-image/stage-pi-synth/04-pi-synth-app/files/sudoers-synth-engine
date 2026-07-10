@@ -1,0 +1,3 @@
+# Let the UI (running as 'synth') start/stop the on-demand engine services
+# without a password. Scoped tightly to just those units.
+synth ALL=(root) NOPASSWD: /usr/bin/systemctl start fluidsynth-engine.service, /usr/bin/systemctl stop fluidsynth-engine.service, /usr/bin/systemctl start setbfree.service, /usr/bin/systemctl stop setbfree.service

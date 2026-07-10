@@ -1,0 +1,11 @@
+# Harvested RT kernel artifacts (large, board-specific — provide them locally).
+# See kernel/README.md. Use Git LFS if you want them version-controlled.
+kernel/*.img
+kernel/modules/
+kernel/dtb/
+kernel/overlays/
+kernel/*.deb
+
+# pi-gen build artifacts (also ignored inside the submodule, belt-and-suspenders).
+pi-gen/deploy/
+pi-gen/work/

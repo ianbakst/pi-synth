@@ -1,0 +1,45 @@
+# pi-gen configuration for the pi-synth appliance image.
+#
+# ../build.sh copies this file to pi-gen/config (pi-gen auto-detects and bakes it
+# into the build image) and bind-mounts this whole repo into the container at
+# ${PI_SYNTH_SRC}, so the custom stage, the RT kernel artifacts, and the app
+# source are all reachable from inside the container.
+#
+# This file is `source`d by pi-gen/build.sh, so plain shell assignments. Custom
+# variables consumed by our stage scripts must be `export`ed (run.sh scripts are
+# executed as child processes).
+
+IMG_NAME='pi-synth'
+RELEASE='bookworm'                 # must match the pinned pi-gen branch (bookworm-arm64)
+
+# --- First user: MUST be 'synth' ---
+# Every systemd unit and config.py path is hardcoded to /home/synth. pi-gen
+# creates this user (uid 1000) at build time and adds it to audio/video/input/
+# render groups, which is exactly what JACK + SDL2 (KMSDRM + evdev touch) need.
+# DISABLE_FIRST_BOOT_USER_RENAME=1 keeps the name 'synth' (no first-boot prompt);
+# it requires FIRST_USER_PASS to be set.
+FIRST_USER_NAME='synth'
+FIRST_USER_PASS='synth'            # CHANGE THIS, or set a pubkey below. Appliance default.
+DISABLE_FIRST_BOOT_USER_RENAME=1
+
+TARGET_HOSTNAME='pi-synth'
+ENABLE_SSH=1                       # keep SSH (and WiFi) for development/iteration
+# PUBKEY_SSH_FIRST_USER="ssh-ed25519 AAAA... you@host"
+# PUBKEY_ONLY_SSH=1
+
+LOCALE_DEFAULT='en_US.UTF-8'
+KEYBOARD_KEYMAP='us'
+KEYBOARD_LAYOUT='English (US)'
+TIMEZONE_DEFAULT='America/New_York'
+WPA_COUNTRY='US'
+
+DEPLOY_COMPRESSION='xz'            # deploy/*.img.xz; set 'none' for a raw .img
+
+# --- Custom stage wiring ---
+# PI_SYNTH_SRC is where ../build.sh mounts this repo inside the container.
+# Override it for a native (non-Docker) build to point at the real repo path.
+export PI_SYNTH_SRC="${PI_SYNTH_SRC:-/pi-synth-src}"
+
+# stage0/1/2 = upstream minimal + Lite base. Our stage replaces desktop stages
+# 3-5 entirely (they are never referenced, so no SKIP files are needed).
+export STAGE_LIST="stage0 stage1 stage2 ${PI_SYNTH_SRC}/os-image/stage-pi-synth"
