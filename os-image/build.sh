@@ -2,10 +2,11 @@
 #
 # build.sh — build the pi-synth appliance image with pi-gen, in Docker.
 #
-# Keeps the pi-gen submodule pristine (git-wise): we bind-mount this whole repo
-# read-only into the build container (via PIGEN_DOCKER_OPTS) and reference the
-# stage, kernel artifacts, and app source from there. The config's STAGE_LIST /
-# PI_SYNTH_SRC point at that mount (/pi-synth-src).
+# pi-gen is a build dependency fetched on demand (pinned) into os-image/pi-gen,
+# which is gitignored — not a submodule, not committed. We bind-mount this whole
+# repo read-only into the build container (via PIGEN_DOCKER_OPTS) and reference
+# the stage, kernel artifacts, and app source from there. The config's
+# STAGE_LIST / PI_SYNTH_SRC point at that mount (/pi-synth-src).
 #
 # Config delivery: we copy os-image/config to os-image/pi-gen/config rather than
 # passing `build-docker.sh -c`. pi-gen auto-detects a config in its own dir and
@@ -13,7 +14,7 @@
 # directly. This deliberately avoids build-docker.sh's `-c` path rewrite, which
 # uses a GNU-sed-only `\s` and silently breaks on macOS (BSD sed) — leaving the
 # container trying to source the *host* config path. pi-gen already gitignores
-# `config`, so the copied file never dirties the submodule.
+# `config`, so the copied file stays inside the (gitignored) pi-gen dir.
 #
 # Prerequisites:
 #   - Docker running (Docker Desktop on macOS; Apple Silicon builds arm64 natively).
@@ -36,8 +37,20 @@ OS_IMAGE="${REPO}/os-image"
 command -v docker >/dev/null 2>&1 || die "docker not found. Install/start Docker Desktop."
 docker info >/dev/null 2>&1 || die "docker daemon not reachable. Start Docker."
 
-[ -e "${OS_IMAGE}/pi-gen/build-docker.sh" ] || \
-    die "pi-gen submodule missing. Run: git submodule update --init os-image/pi-gen"
+# Fetch pi-gen on demand, pinned to the exact tested commit. It's a build tool,
+# not vendored — os-image/pi-gen is gitignored.
+PIGEN_REPO="https://github.com/RPi-Distro/pi-gen.git"
+PIGEN_BRANCH="bookworm-arm64"
+PIGEN_REF="d7a31c6aa09f4b867902c51da2b45807c0a1709e"
+if [ ! -e "${OS_IMAGE}/pi-gen/build-docker.sh" ]; then
+    echo "Fetching pi-gen (${PIGEN_BRANCH}) ..."
+    git clone --branch "${PIGEN_BRANCH}" "${PIGEN_REPO}" "${OS_IMAGE}/pi-gen"
+fi
+if [ "$(git -C "${OS_IMAGE}/pi-gen" rev-parse HEAD 2>/dev/null)" != "${PIGEN_REF}" ]; then
+    echo "Pinning pi-gen to ${PIGEN_REF}"
+    git -C "${OS_IMAGE}/pi-gen" fetch origin
+    git -C "${OS_IMAGE}/pi-gen" checkout -q "${PIGEN_REF}"
+fi
 
 # Validate the harvested RT kernel artifacts (see os-image/kernel/README.md).
 shopt -s nullglob
@@ -54,7 +67,7 @@ shopt -u nullglob
 echo "Using RT kernel image:   $(basename "${imgs[0]}")"
 echo "Using RT kernel modules: $(basename "${moddirs[0]%/}")"
 
-# Deliver our config the pi-gen-native way (gitignored inside the submodule).
+# Deliver our config the pi-gen-native way (gitignored inside the pi-gen dir).
 cp "${OS_IMAGE}/config" "${OS_IMAGE}/pi-gen/config"
 echo "Config staged at pi-gen/config"
 

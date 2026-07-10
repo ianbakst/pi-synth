@@ -6,6 +6,5 @@ kernel/dtb/
 kernel/overlays/
 kernel/*.deb
 
-# pi-gen build artifacts (also ignored inside the submodule, belt-and-suspenders).
-pi-gen/deploy/
-pi-gen/work/
+# pi-gen is fetched on demand by build.sh (pinned) — never committed.
+pi-gen/
