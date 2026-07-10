@@ -1,0 +1,16 @@
+python3-pygame
+fluidsynth
+fluid-soundfont-gm
+jackd2
+a2jmidid
+setbfree
+alsa-utils
+build-essential
+cmake
+pkg-config
+git
+ca-certificates
+libsndfile1-dev
+libjack-jackd2-dev
+liblilv-dev
+libreadline-dev

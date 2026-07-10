@@ -1,0 +1,2 @@
+# Pre-answer jackd2's "grant realtime priority?" prompt so install is non-interactive.
+jackd2 jackd/tweak_rt_limits boolean true

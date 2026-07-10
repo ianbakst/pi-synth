@@ -1,124 +1,64 @@
-# MIDI Instrument
+# pi-synth
 
-A dedicated MIDI instrument built on a Raspberry Pi 4. FluidSynth handles audio synthesis, a PCM5102A I2S DAC handles output, and a 3.5" touchscreen (800×480) lets you switch voices and control volume.
+A dedicated, hot-swappable MIDI instrument built on a Raspberry Pi 4. Multiple
+audio engines — FluidSynth, sfizz, setBfree, Dexed, Pianoteq — run behind a common
+interface and are switched at runtime from a 3.5" touchscreen. Audio flows over
+JACK to a PCM5102A I2S DAC; a USB MIDI keyboard is bridged into JACK by
+`a2jmidid`. The Python UI is a **control plane only** — it patches the JACK graph
+and starts/stops engines; notes and samples never pass through Python.
 
-On a non-Pi machine the app runs with a stub audio backend so the UI can be developed without hardware.
+On a non-Pi machine the UI runs windowed for development (`IS_PI` is auto-detected).
 
 ## Hardware
 
 | Component | Part |
 |---|---|
-| SBC | Raspberry Pi 4 |
-| DAC | Teyleten Robot PCM5102A (I2S) |
+| SBC | Raspberry Pi 4 (64-bit, PREEMPT_RT kernel) |
+| DAC | Teyleten Robot PCM5102A (I2S, `hifiberry-dac` overlay) |
 | Display | 3.5" 800×480 touchscreen (ft5x06) |
 | MIDI input | USB MIDI keyboard(s) — hot-plug supported |
 
-## Quickstart (dev machine)
+## Provisioning: flash the custom image
+
+The supported way to build a unit is to flash the **custom Raspberry Pi OS image**
+built by pi-gen — it bakes in the RT kernel, the JACK/engine stack, all systemd
+services, and this app, and boots straight to the UI with nothing to run by hand.
+
+See **[os-image/README.md](os-image/README.md)**. In short: drop your prebuilt
+RT kernel `.deb` in `os-image/kernel/`, then `cd os-image && ./build.sh`.
+
+## Development
 
 ```bash
-git clone <repo>
-cd synth
 uv sync
-uv run python src/main.py   # runs with stub audio backend
+uv run python -m synth_ui.main   # windowed UI (dev machine)
+uv run pytest                    # tests
+uv run ruff check src/           # lint
 ```
 
-## Pi setup
+### Iterating on a running Pi
 
-### 1. Clone and install
+Once a unit is flashed, push app changes to it without reflashing:
 
 ```bash
-git clone <repo> ~/synth
-cd ~/synth
-sudo apt-get install -y $(cat apt-requirements.txt)
-```
-
-### 3. Add SoundFonts
-
-Place `.sf2` or `.sf3` files in `~/soundfonts/`. The UI scans this directory recursively on startup.
-
-### 4. Configure
-
-Edit `config.toml` to match your hardware:
-
-```toml
-[audio]
-card = "hifiberry"      # matched case-insensitively against /proc/asound/cards
-period_size = 128       # lower = less latency; 128 is stable on Pi 4 (~5ms)
-
-[display]
-width = 800
-height = 480
-touch_device = "/dev/input/event4"   # find with: ls /dev/input/event*
-```
-
-Set `device = "hw:2"` under `[audio]` to bypass card name resolution if needed.
-
-Override paths via environment variables:
-- `SYNTH_CONFIG` — path to a different config file
-- `SYNTH_SOUNDFONT_DIR` — soundfont directory (default: `~/soundfonts`)
-- `SYNTH_STATE_FILE` — last-selected voice state file (default: `~/.synth-state`)
-
-### 5. Run manually
-
-```bash
-taskset -c 0,1 python3 src/main.py
-```
-
-### 6. Install as a service
-
-```bash
-sudo cp systemd/cpu-performance.service /etc/systemd/system/
-sudo cp systemd/synth.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now cpu-performance.service
-sudo systemctl enable --now synth.service
-```
-
-The service expects the repo at `/home/synth/synth` and the user `synth` in the `audio` group. Adjust `WorkingDirectory` and `User` in `systemd/synth.service` if your setup differs.
-
-## Boot configuration (Pi)
-
-`/boot/firmware/config.txt`:
-```
-dtparam=i2s=on
-dtoverlay=hifiberry-dac
-dtoverlay=disable-bt
-dtparam=audio=off
-camera_auto_detect=0
-display_auto_detect=0
-```
-
-`/boot/firmware/cmdline.txt` (append to existing line):
-```
-isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3
+./deploy.sh <pi-host>    # rsync src -> /home/synth/synth, run tests, restart synth-ui
 ```
 
 ## Project structure
 
 ```
-src/
-  main.py               entry point
-  config.py             loads config.toml + env vars, resolves ALSA device
-  controller/
-    backend.py          AudioBackend ABC, StubBackend, create_backend()
-    fluidsynth.py       FluidSynth process management
-    socket_client.py    persistent TCP connection to FluidSynth shell
-    midi_monitor.py     ALSA hot-plug monitor (libasound via ctypes)
-  ui/
-    ui.py               Pygame touchscreen UI
-    colors.py           colour constants
-    layout.py           layout constants
-systemd/
-  cpu-performance.service
-  synth.service
-config.toml             hardware settings (edit this, not config.py)
-apt-requirements.txt    system packages (fluidsynth, alsa-utils)
+src/synth_ui/          the control-plane app
+  main.py              entry point (python -m synth_ui.main)
+  config.py            paths, screen, ports, colors
+  clients/             engine_manager, mod_host_client, socket/synth clients, voice
+  ui/                  pygame touchscreen UI (screens, components)
+scripts/
+  engine-manager.sh    stop current engine, start the new one (called by the UI)
+  midi-connect.sh      route the keyboard's JACK MIDI to the active engine
+systemd/               the 7 units (jack, a2jmidid, mod-host, synth-ui, ... )
+instruments/voices.json  the voice manifest
+os-image/              pi-gen custom image build (provisioning)
+hardware/              DAC HAT / enclosure design files (Git LFS)
 ```
 
-## Development
-
-```bash
-uv run python src/main.py   # run with stub backend
-uv run pytest               # run tests
-uv run ruff check src/      # lint
-```
+See [AUDIO_UPGRADE.md](AUDIO_UPGRADE.md) for the multi-engine audio architecture.

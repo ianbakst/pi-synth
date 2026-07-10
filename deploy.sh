@@ -8,6 +8,7 @@ PROJECT="/home/$PI_USER/synth"
 echo "Deploying to $PI:$PROJECT"
 rsync -avz --delete \
     --exclude '.venv' --exclude '__pycache__' --exclude '.git' \
+    --exclude 'os-image' --exclude 'hardware' --exclude '.claude' \
     --exclude 'soundfonts/*.sf2' --exclude 'soundfonts/*.sf3' \
     ./ "$PI:$PROJECT/"
 

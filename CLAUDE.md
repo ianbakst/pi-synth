@@ -1,5 +1,25 @@
 # MIDI Instrument — Project Specification & Rebuild Instructions
 
+> ## ⚠️ CURRENT STATE (2026-07 — read this first)
+>
+> **Provisioning is now a custom pi-gen OS image, not `setup.sh`.** `setup.sh`
+> has been removed. To build a unit, flash the image built under
+> [`os-image/`](os-image/README.md) (drop your RT kernel `.deb` in
+> `os-image/kernel/`, then `cd os-image && ./build.sh`). `deploy.sh` is still the
+> fast inner loop for pushing app changes to a running Pi.
+>
+> **The software architecture below is partly historical.** The project has moved
+> from the single-engine *FluidSynth-over-TCP* design described in this document
+> to a **multi-engine stack over JACK**: USB MIDI → `a2jmidid` → JACK → the active
+> engine (FluidSynth, sfizz, setBfree, Dexed, Pianoteq) → I2S DAC. The Python UI
+> is a control plane that patches the JACK graph and starts/stops engines via
+> `scripts/engine-manager.sh` + `scripts/midi-connect.sh` and a mod-host socket —
+> notes never pass through Python. The **source of truth** for the running system
+> is the `systemd/*.service` units, `scripts/`, `src/synth_ui/`, and
+> [`AUDIO_UPGRADE.md`](AUDIO_UPGRADE.md) — not the FluidSynth-specific details
+> below. The **hardware, boot-config, and RT-tuning** sections below remain
+> accurate.
+
 ## IMPORTANT: Read this entire document before making any changes.
 
 This document describes a working MIDI instrument built on a Raspberry Pi 4. A previous Claude session broke the project. This document provides everything needed to rebuild it correctly.

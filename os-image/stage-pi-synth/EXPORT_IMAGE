@@ -1,0 +1,6 @@
+# Presence of this file makes pi-gen export a flashable image for this stage.
+# Empty suffix -> the image is named after IMG_NAME ('pi-synth').
+IMG_SUFFIX=""
+if [ "${USE_QEMU}" = "1" ]; then
+	export IMG_SUFFIX="${IMG_SUFFIX}-qemu"
+fi
