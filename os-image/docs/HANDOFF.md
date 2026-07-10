@@ -18,6 +18,9 @@
 >   Raspberry Pi OS, which uses a Pi-specific kernel + boot path).
 > - Stages are `00-base-packages` … `06-system-tuning` (see the README table);
 >   Plymouth is deferred as an optional phase-2 stage.
+> - **pi-gen is fetched on demand by `build.sh` (pinned commit), not a git
+>   submodule.** `os-image/pi-gen/` is gitignored; it's treated as a build tool,
+>   not vendored into the repo.
 >
 > The architecture rationale below (engine model, no-Python-in-note-path, pi-gen
 > choice, RT tuning) remains accurate and is why the current design looks as it

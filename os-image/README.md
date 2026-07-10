@@ -7,8 +7,10 @@ provisioning of a stock Lite card.
 
 It's a thin custom stage (`stage-pi-synth/`) layered on top of pi-gen's minimal +
 Lite stages (`stage0`–`stage2`); the desktop stages 3–5 are never referenced.
-pi-gen itself is a **pinned git submodule** (`bookworm-arm64`) — it is never
-modified; our stage lives here and is fed to pi-gen by absolute path.
+pi-gen itself is a **build dependency `build.sh` fetches on demand**, pinned to an
+exact commit on `bookworm-arm64`, into the gitignored `os-image/pi-gen/` — it is
+never modified or committed; our stage lives here and is fed to pi-gen by
+absolute path.
 
 ## Prerequisites
 
@@ -21,15 +23,15 @@ modified; our stage lives here and is fed to pi-gen by absolute path.
 ## Build
 
 ```bash
-git clone --recursive https://github.com/ianbakst/pi-synth.git
+git clone https://github.com/ianbakst/pi-synth.git
 cd pi-synth
 # harvest your RT kernel into os-image/kernel/ (see kernel/README.md)
 cd os-image
-./build.sh
+./build.sh          # fetches + pins pi-gen on first run, then builds
 ```
 
-(Already cloned without `--recursive`? Run
-`git submodule update --init os-image/pi-gen`.)
+`build.sh` clones pi-gen (pinned) into `os-image/pi-gen/` the first time — no
+submodule, no `--recursive` needed.
 
 The image lands in `os-image/pi-gen/deploy/` as `*-pi-synth.img.xz`.
 
