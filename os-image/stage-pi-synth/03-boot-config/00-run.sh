@@ -25,9 +25,12 @@ fi
 
 # --- cmdline.txt: isolate cores 2,3 for JACK/engines + quiet boot ---
 # Single-line file; append our args once if not already there.
-ISOL="isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3"
+# Isolate cores 1,2,3 for audio: core 1 = JACK, core 2 = instrument engine,
+# core 3 = effects (reserved). Core 0 is left for the OS + UI. See
+# docs/engine-architecture.md.
+ISOL="isolcpus=1,2,3 nohz_full=1,2,3 rcu_nocbs=1,2,3"
 QUIET="quiet loglevel=3 vt.global_cursor_default=0 logo.nologo"
-if ! grep -q "isolcpus=2,3" "${CMDLINE}"; then
+if ! grep -q "isolcpus=1,2,3" "${CMDLINE}"; then
 	sed -i "s|\$| ${ISOL} ${QUIET}|" "${CMDLINE}"
 	echo "cmdline.txt: appended CPU isolation + quiet-boot args"
 else

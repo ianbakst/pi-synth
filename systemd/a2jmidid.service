@@ -13,7 +13,8 @@ Type=simple
 User=synth
 # -e / --export-hw: export only physical (hardware) MIDI ports, not software
 # ALSA-seq clients like FluidSynth or Midi Through.
-ExecStart=/usr/bin/a2jmidid -e
+# Pinned to core 1 with JACK (it's light — sparse MIDI events, not DSP).
+ExecStart=/usr/bin/taskset -c 1 /usr/bin/a2jmidid -e
 Restart=always
 RestartSec=1
 

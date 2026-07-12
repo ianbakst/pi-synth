@@ -32,7 +32,8 @@ case "$ENGINE" in
         sudo systemctl start setbfree.service
         ;;
     pianoteq)
-        chrt -f 80 taskset -c 2,3 \
+        # Core 2: the instrument engine core (matches the other engines).
+        chrt -f 80 taskset -c 2 \
             pianoteq --headless --midi-channel 1 &
         disown
         ;;

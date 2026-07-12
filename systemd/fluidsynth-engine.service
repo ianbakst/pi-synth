@@ -6,10 +6,12 @@ Requires=jack.service
 [Service]
 Type=simple
 User=synth
-ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
+# Core 2: the instrument engine core.
+ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 \
     /usr/bin/fluidsynth \
     -a jack \
     -m jack \
+    -o audio.jack.autoconnect=1 \
     -o synth.sample-rate=48000 \
     -o synth.gain=2.0 \
     -o shell.port=9800 \

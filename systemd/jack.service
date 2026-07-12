@@ -6,7 +6,9 @@ After=sound.target
 Type=simple
 User=synth
 Environment=JACK_NO_AUDIO_RESERVATION=1
-ExecStart=/usr/bin/chrt -f 90 /usr/bin/taskset -c 2,3 \
+# Core 1: JACK's ALSA backend/driver thread — the audio heartbeat — runs alone
+# on the first isolated core, alongside the (light) a2jmidid MIDI bridge.
+ExecStart=/usr/bin/chrt -f 90 /usr/bin/taskset -c 1 \
     /usr/bin/jackd -d alsa -d hw:sndrpihifiberry -r 48000 -p 128 -n 2
 LimitRTPRIO=90
 LimitMEMLOCK=infinity
