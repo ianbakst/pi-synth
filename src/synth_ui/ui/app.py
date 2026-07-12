@@ -5,6 +5,7 @@ from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
     DEFAULT_GAIN,
+    DEFAULT_VOICE,
     ENGINE_MANAGER_SCRIPT,
     FLUIDSYNTH_HOST,
     FLUIDSYNTH_PORT,
@@ -73,7 +74,9 @@ class SynthUI:
             on_gain_change=self._on_gain_change,
             on_save=_save_state,
             on_usb=self._show_usb_screen,
-            initial_name=_load_state(),
+            # Fall back to a default so a freshly flashed card (no ~/.synth-state)
+            # boots straight into a playable instrument.
+            initial_name=_load_state() or DEFAULT_VOICE,
             initial_gain=self._gain,
         )
         self.screen: Screen = SplashScreen()

@@ -8,7 +8,10 @@ Type=simple
 User=synth
 # /usr/local/lib/lv2 is where source-built sfizz/Dexed plugins install.
 Environment=LV2_PATH=/usr/lib/lv2:/usr/local/lib/lv2
-ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
+# Core 2: the instrument engine core. mod-host hosts the active sfizz/dexed
+# instrument here. (A second mod-host for effects on core 3 comes in Phase 3 —
+# see docs/engine-architecture.md.)
+ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 \
     /usr/local/bin/mod-host -n -p 5555
 LimitRTPRIO=80
 LimitMEMLOCK=infinity

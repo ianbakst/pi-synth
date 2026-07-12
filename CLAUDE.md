@@ -76,7 +76,7 @@ NOTE: `display_auto_detect=0` was removed because it disabled the touchscreen.
 
 ### /boot/firmware/cmdline.txt (appended to existing line):
 ```
-isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3
+isolcpus=1,2,3 nohz_full=1,2,3 rcu_nocbs=1,2,3
 ```
 
 ## System Tuning Already Applied
@@ -85,7 +85,7 @@ These are already configured on the Pi and should NOT be changed:
 
 - PREEMPT_RT kernel built from `rpi-6.12.y` branch with `bcm2711_rt_defconfig`
 - CPU governor locked to `performance` via systemd service
-- IRQ affinity pinned to cores 0-1 via systemd service
+- IRQ affinity pinned to core 0 via systemd service (off the isolated audio cores 1,2,3)
 - Swap disabled
 - `/etc/security/limits.conf` has `@audio - rtprio 99` and `@audio - memlock unlimited`
 - User `synth` is in `audio` group
@@ -858,8 +858,11 @@ echo "Deploy complete."
 ## Things That MUST NOT Change
 
 1. FluidSynth runs as its own systemd service, NOT managed by Python
-2. FluidSynth runs on cores 2-3 with RT priority 80
-3. Python UI runs on cores 0-1 with normal priority
+2. Audio engines run on the isolated cores: JACK on core 1, the active instrument
+   engine on core 2, effects (reserved) on core 3 — all RT. See
+   docs/engine-architecture.md for the full core allocation.
+3. The Python UI runs on core 0 (shared with the OS), normal priority, Nice=5 —
+   never on the isolated audio cores
 4. Communication between UI and FluidSynth is TCP only (port 9800)
 5. Touch events are FINGERDOWN/FINGERMOTION/FINGERUP with normalized coordinates
 6. The audio device is hw:sndrpihifiberry (by name — never by number, which can shift at boot)

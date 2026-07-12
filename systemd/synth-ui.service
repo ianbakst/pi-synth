@@ -7,7 +7,10 @@ Requires=jack.service mod-host.service
 Type=simple
 User=synth
 WorkingDirectory=/home/synth/synth/src
-ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 -m synth_ui.main
+# Core 0: the only non-isolated core, shared with the OS. The UI is a low-priority
+# 30 fps control plane — it must stay off the isolated audio cores (1,2,3).
+ExecStart=/usr/bin/taskset -c 0 /usr/bin/python3 -m synth_ui.main
+Nice=5
 Restart=always
 RestartSec=2
 # NOTE: SDL_FBDEV / SDL_MOUSEDEV / SDL_MOUSEDRV are SDL 1.2 variables and are
