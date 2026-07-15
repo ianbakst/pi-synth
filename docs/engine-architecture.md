@@ -90,6 +90,31 @@ fluidsynth relies on luck. Audio patching becomes an explicit EngineManager
 responsibility (Phase 2), and fluidsynth gets `audio.jack.autoconnect=1` now
 (Phase 1).
 
+## Audio device selection (which card JACK opens)
+
+A *different* discovery layer from `JackGraph`: which physical sound card jackd
+opens. JACK binds one device at startup and presents uniform `system:playback_*`
+ports regardless — so the graph patching above is card-agnostic; only jackd's
+startup device changes.
+
+- **`AudioDevices`** (`clients/audio_devices.py`) enumerates ALSA playback cards
+  from `aplay -l` by stable id (`hw:<id>`, never index), and resolves the
+  effective device by precedence: **valid saved choice → HiFiBerry → first card →
+  none**.
+- **`scripts/start-jack.sh`** is `jack.service`'s ExecStart. It applies that same
+  precedence at boot and falls back to jackd's **dummy backend** if no card is
+  present — so jackd (and the UI) always come up and the user can recover from a
+  missing/renamed card.
+- Selection persists in `~/.synth-audio-device` (config `AUDIO_DEVICE_FILE`),
+  written by the UI. Absent = auto-detect (the out-of-box default).
+- Changing the card = **restart jackd** (not a live patch), which rebuilds the
+  stack: `mod-host`/`a2jmidid` are `PartOf=jack.service` so they cycle with it;
+  `synth-ui` is `Wants=` (not `Requires=`) so the control-plane UI survives the
+  restart it triggered, then reloads the active voice to re-patch.
+- **Next:** a UI "Audio" screen (list cards → select → write file → `sudo
+  systemctl restart jack.service` → reload voice; sudoers already scoped for it),
+  and sample-rate / buffer-size tuning on the same screen.
+
 ## The Python layer (target shape)
 
 ```

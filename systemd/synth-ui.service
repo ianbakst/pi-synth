@@ -1,7 +1,10 @@
 [Unit]
 Description=MIDI Instrument UI
 After=jack.service mod-host.service
-Requires=jack.service mod-host.service
+# Wants, not Requires: the UI is the control plane and must NOT die when the audio
+# stack restarts (e.g. when the UI itself restarts jack to switch the audio card).
+# It starts after them but its lifecycle is decoupled from theirs.
+Wants=jack.service mod-host.service
 
 [Service]
 Type=simple

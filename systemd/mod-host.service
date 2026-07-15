@@ -2,6 +2,9 @@
 Description=mod-host LV2 Plugin Host
 After=jack.service
 Requires=jack.service
+# Cycle with JACK: a card change restarts jack, and mod-host must re-register on
+# the new server. The UI reloads the active voice afterward to re-patch.
+PartOf=jack.service
 
 [Service]
 Type=simple

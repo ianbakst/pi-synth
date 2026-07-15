@@ -14,6 +14,10 @@ INSTRUMENTS_DIR = os.path.expanduser("~/instruments")
 VOICES_MANIFEST = os.path.join(INSTRUMENTS_DIR, "voices.json")
 STATE_FILE = os.path.expanduser("~/.synth-state")
 
+# Selected ALSA card id (e.g. "sndrpihifiberry"). The UI writes it; scripts/
+# start-jack.sh reads it to pick JACK's device. Absent = auto-detect (default).
+AUDIO_DEVICE_FILE = os.path.expanduser("~/.synth-audio-device")
+
 # Voice loaded on a fresh boot when no ~/.synth-state exists yet. Must match a
 # `name` in voices.json. The FluidSynth "General MIDI" voice is the safe default:
 # its default.sf2 is guaranteed present in the image and (with the service's
