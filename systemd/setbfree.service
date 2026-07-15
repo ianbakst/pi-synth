@@ -6,7 +6,15 @@ Requires=jack.service
 [Service]
 Type=simple
 User=synth
+# LimitRTPRIO/LimitMEMLOCK are REQUIRED: systemd caps RLIMIT_RTPRIO at 0 for a
+# unit, and /etc/security/limits.conf (@audio) does NOT apply to services — only
+# to PAM logins. Without this, `chrt -f 80` fails with EPERM and the service
+# dies before setBfree execs. Mirrors jack.service / mod-host.service.
+LimitRTPRIO=80
+LimitMEMLOCK=infinity
 ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 /usr/bin/setBfree
+Restart=on-failure
+RestartSec=1
 # Not enabled at boot — started on demand by engine-manager.sh
 
 [Install]
