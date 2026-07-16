@@ -1,62 +1,80 @@
-"""Tests for FluidSynthClient and FluidSynthController."""
+"""Tests for the FluidSynth client stack: SocketClient (raw per-command TCP) and
+FluidSynthController (high-level commands). All sockets are mocked."""
 
-import sys
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-sys.path.insert(0, "src")
-
-from synth_ui.clients.synth_client import FluidSynthController
+from synth_ui.clients.socket_client import SocketClient
+from synth_ui.clients.synth_client import FluidSynthController, Preset
 
 
-class TestFluidSynthClient(unittest.TestCase):
-    def test_send_returns_none_when_connect_fails(self):
-        client = FluidSynthClient()
-        with patch("socket.socket") as mock_sock_cls:
-            mock_sock_cls.return_value.connect.side_effect = ConnectionRefusedError
-            result = client.send("fonts")
-        self.assertIsNone(result)
-
-    def test_close_is_safe_when_not_connected(self):
-        client = FluidSynthClient()
-        client.close()  # should not raise
-
-    def test_send_reconnects_after_dropped_connection(self):
-        client = FluidSynthClient()
-        mock_sock = MagicMock()
-        mock_sock.recv.return_value = b"FluidSynth>\n"
-        with patch("socket.socket", return_value=mock_sock):
-            client.connect()
-            mock_sock.sendall.side_effect = BrokenPipeError
-            result = client.send("fonts")
-        self.assertIsNone(result)
-        self.assertIsNone(client.sock)
+def _socket_client(mock_sock: MagicMock) -> SocketClient:
+    c = SocketClient()
+    c.factory = lambda: mock_sock  # every connect() uses our mock socket
+    return c
 
 
-class TestFluidSynthController(unittest.TestCase):
-    def test_load_soundfont_returns_false_when_disconnected(self):
+class TestSocketClient:
+    def test_send_command_returns_decoded_response(self):
+        sock = MagicMock()
+        # one chunk of data, then silence (TimeoutError) ends the read
+        sock.recv.side_effect = [b"22-000 Piano\n", TimeoutError()]
+        c = _socket_client(sock)
+        assert c.send_command("inst 1") == "22-000 Piano\n"
+        sock.sendall.assert_called_once_with(b"inst 1\n")
+        sock.close.assert_called_once()  # connection closed per command
+
+    def test_send_command_returns_none_on_no_data(self):
+        sock = MagicMock()
+        sock.recv.return_value = b""
+        assert _socket_client(sock).send_command("fonts") is None
+
+    def test_fire_command_sends_without_reading(self):
+        sock = MagicMock()
+        c = _socket_client(sock)
+        c.fire_command("reset")
+        sock.sendall.assert_called_once_with(b"reset\n")
+        sock.recv.assert_not_called()
+        sock.close.assert_called_once()
+
+
+class TestFluidSynthController:
+    @staticmethod
+    def _ctrl(sock_client: MagicMock) -> FluidSynthController:
         ctrl = FluidSynthController()
-        with patch.object(ctrl.client, "send", return_value=None):
-            result = ctrl.load_soundfont("/path/to/font.sf2")
-        self.assertFalse(result)
+        ctrl._socket = sock_client
+        return ctrl
 
-    def test_load_soundfont_returns_true_on_success(self):
-        ctrl = FluidSynthController()
-        with patch.object(ctrl.client, "send", return_value="ok"):
-            result = ctrl.load_soundfont("/path/to/font.sf2")
-        self.assertTrue(result)
-        self.assertEqual(ctrl.current_font, "/path/to/font.sf2")
+    def test_load_soundfont_false_when_load_gets_no_response(self):
+        s = MagicMock()
+        s.send_command.return_value = None
+        ctrl = self._ctrl(s)
+        assert ctrl.load_soundfont("/f.sf2") is False
+        s.fire_command.assert_not_called()  # bails before select/reset
 
-    def test_is_connected_false_when_send_returns_none(self):
-        ctrl = FluidSynthController()
-        with patch.object(ctrl.client, "send", return_value=None):
-            self.assertFalse(ctrl.is_connected())
+    def test_load_soundfont_true_selects_and_resets(self):
+        s = MagicMock()
+        s.send_command.return_value = "ok"
+        ctrl = self._ctrl(s)
+        assert ctrl.load_soundfont("/f.sf2") is True
+        s.send_command.assert_called_once()          # the load
+        assert s.fire_command.call_count == 2         # select + reset
 
-    def test_is_connected_true_when_send_returns_response(self):
-        ctrl = FluidSynthController()
-        with patch.object(ctrl.client, "send", return_value="ID  Filename\n"):
-            self.assertTrue(ctrl.is_connected())
+    def test_is_connected_reflects_fonts_response(self):
+        s = MagicMock()
+        s.send_command.return_value = "1  FluidR3_GM.sf2\n"
+        assert self._ctrl(s).is_connected() is True
+        s.send_command.return_value = None
+        assert self._ctrl(s).is_connected() is False
 
+    def test_set_gain_fires_formatted_gain_command(self):
+        s = MagicMock()
+        self._ctrl(s).set_gain(2.5)
+        s.fire_command.assert_called_once_with("gain 2.50")
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_list_presets_parses_bank_prog_name_lines(self):
+        s = MagicMock()
+        s.send_command.return_value = "000-000 Piano\n000-001 Bright\nnot a preset\n"
+        assert self._ctrl(s).list_presets() == [
+            Preset(0, 0, "Piano"),
+            Preset(0, 1, "Bright"),
+        ]
