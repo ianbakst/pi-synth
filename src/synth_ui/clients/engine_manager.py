@@ -16,7 +16,9 @@ select_preset / set_gain / is_connected).
 """
 
 import logging
+import time
 
+from synth_ui.clients.audio_devices import AudioDevices, Card
 from synth_ui.clients.constants import (
     DEFAULT_PORT,
     FIRST_TIMEOUT,
@@ -29,12 +31,15 @@ from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.synth_client import FluidSynthController, Preset
 from synth_ui.clients.voice import Voice
+from synth_ui.config import AUDIO_DEVICE_FILE
 
 logger = logging.getLogger(__name__)
 
 _MOD_HOST_PORT = 5555
 # How long to wait for a newly-started engine to register its JACK ports.
 _READY_TIMEOUT = 6.0
+# How long to wait for jack + mod-host to come back after a card-change restart.
+_AUDIO_STACK_TIMEOUT = 10.0
 
 
 class EngineManager:
@@ -46,6 +51,7 @@ class EngineManager:
         fluidsynth_port: int = DEFAULT_PORT,
         mod_host_host: str = LOCALHOST,
         mod_host_port: int = _MOD_HOST_PORT,
+        audio_device_file: str = AUDIO_DEVICE_FILE,
     ):
         self._fluidsynth = FluidSynthController(
             host=fluidsynth_host,
@@ -59,6 +65,8 @@ class EngineManager:
         self._ctx = EngineContext(
             jack=self._jack, mod_host=self._mod_host, fluidsynth=self._fluidsynth
         )
+        self._audio = AudioDevices()
+        self._audio_device_file = audio_device_file
         self._registry = ENGINE_REGISTRY  # overridable in tests
         self._active: Engine | None = None
 
@@ -100,6 +108,68 @@ class EngineManager:
 
     def is_connected(self) -> bool:
         return self._active is not None and self._active.is_ready()
+
+    # ------------------------------------------------------------------
+    # Audio device (which ALSA card JACK opens)
+    # ------------------------------------------------------------------
+
+    def list_audio_cards(self) -> list[Card]:
+        return self._audio.list_cards()
+
+    def current_audio_device(self) -> str | None:
+        """The card id currently in effect (saved choice resolved by precedence)."""
+        return self._audio.resolve(self._read_audio_device())
+
+    def set_audio_device(self, card_id: str) -> bool:
+        """Persist the card, restart the JACK stack onto it, and re-establish the
+        active voice. JACK binds its device at startup, so this restarts jackd
+        (mod-host/a2jmidid cycle via PartOf); the previous voice is rebuilt on the
+        new server."""
+        voice = self._active.voice if self._active is not None else None
+        if self._active is not None:
+            self._active.panic()
+            self._active.stop()
+            self._active = None
+
+        self._write_audio_device(card_id)
+        if self._ctx.systemctl(["sudo", "systemctl", "restart", "jack.service"]) != 0:
+            logger.error("jack restart failed while switching audio device")
+            return False
+        if not self._wait_audio_stack():
+            return False
+
+        if voice is not None:
+            return self.load_voice(voice)
+        return True
+
+    def _wait_audio_stack(self, timeout: float = _AUDIO_STACK_TIMEOUT) -> bool:
+        """Block until jack and mod-host are back after a restart."""
+        if not self._jack.wait_for(
+            client="system", type="audio", is_output=False, timeout=timeout
+        ):
+            logger.error("jack did not return after restart")
+            return False
+        deadline = time.monotonic() + timeout
+        while not self._mod_host.is_connected():
+            if time.monotonic() >= deadline:
+                logger.error("mod-host did not return after jack restart")
+                return False
+            time.sleep(0.1)
+        return True
+
+    def _read_audio_device(self) -> str | None:
+        try:
+            with open(self._audio_device_file) as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
+    def _write_audio_device(self, card_id: str) -> None:
+        try:
+            with open(self._audio_device_file, "w") as f:
+                f.write(card_id)
+        except OSError as e:
+            logger.error("could not persist audio device selection: %s", e)
 
     # ------------------------------------------------------------------
     # Switching

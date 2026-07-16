@@ -6,8 +6,14 @@ swap in a FakeJack and a fake registry, so no JACK/mod-host/fluidsynth is needed
 
 from unittest.mock import MagicMock
 
+from synth_ui.clients.audio_devices import AudioDevices
 from synth_ui.clients.engine_manager import EngineManager
 from synth_ui.clients.voice import Voice
+
+APLAY = (
+    "card 0: sndrpihifiberry [snd_rpi_hifiberry_dac], device 0: HifiBerry DAC\n"
+    "card 1: Headphones [bcm2835 Headphones], device 0: Headphones\n"
+)
 
 # Shared ordered event log, so tests can assert connect-before-disconnect.
 EVENTS: list = []
@@ -197,3 +203,39 @@ def test_is_connected_reflects_active_readiness():
     assert m.is_connected() is False           # nothing active
     m.load_voice(GM)
     assert m.is_connected() is True
+
+
+# --- audio device selection -------------------------------------------------
+
+def test_list_and_current_audio_device(tmp_path):
+    m = make_mgr()
+    m._audio = AudioDevices(reader=lambda: APLAY)
+    m._audio_device_file = str(tmp_path / "dev")
+    assert [c.id for c in m.list_audio_cards()] == ["sndrpihifiberry", "Headphones"]
+    assert m.current_audio_device() == "sndrpihifiberry"   # no save -> default
+    (tmp_path / "dev").write_text("Headphones")
+    assert m.current_audio_device() == "Headphones"        # honours saved choice
+
+
+def test_set_audio_device_persists_restarts_and_reloads(tmp_path):
+    m = make_mgr()
+    m._audio_device_file = str(tmp_path / "dev")
+    calls: list = []
+    m._ctx.systemctl = lambda argv: calls.append(argv) or 0
+    m._mod_host = MagicMock()
+    m._mod_host.is_connected.return_value = True
+
+    m.load_voice(GM)
+    assert m.set_audio_device("Headphones") is True
+    assert (tmp_path / "dev").read_text() == "Headphones"
+    assert ["sudo", "systemctl", "restart", "jack.service"] in calls
+    # the active voice was rebuilt on the new server
+    assert m._active is not None and m._active.voice.name == "GM"
+
+
+def test_set_audio_device_fails_when_jack_restart_fails(tmp_path):
+    m = make_mgr()
+    m._audio_device_file = str(tmp_path / "dev")
+    m._ctx.systemctl = lambda argv: 1          # restart fails
+    m._mod_host = MagicMock()
+    assert m.set_audio_device("Headphones") is False
