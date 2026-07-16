@@ -4,7 +4,7 @@
 # truth in ../../systemd (copied from the repo, not duplicated here).
 #
 # Always-on at boot:  cpu-performance, jack, a2jmidid, mod-host, synth-ui
-# On-demand (started by the UI via engine-manager.sh, NOT enabled):
+# On-demand (started by the UI / EngineManager via systemctl, NOT enabled):
 #                     fluidsynth-engine, setbfree
 
 for unit in cpu-performance jack a2jmidid mod-host fluidsynth-engine setbfree synth-ui; do

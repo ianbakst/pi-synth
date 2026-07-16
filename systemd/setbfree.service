@@ -16,7 +16,7 @@ LimitMEMLOCK=infinity
 ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 /usr/bin/setBfree
 Restart=on-failure
 RestartSec=1
-# Not enabled at boot — started on demand by engine-manager.sh
+# Not enabled at boot — started on demand by the UI (EngineManager via systemctl)
 
 [Install]
 WantedBy=multi-user.target

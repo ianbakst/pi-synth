@@ -6,7 +6,6 @@ from synth_ui.config import (
     BG,
     DEFAULT_GAIN,
     DEFAULT_VOICE,
-    ENGINE_MANAGER_SCRIPT,
     FLUIDSYNTH_HOST,
     FLUIDSYNTH_PORT,
     IS_PI,
@@ -59,7 +58,6 @@ class SynthUI:
         pygame.display.set_caption("MIDI Instrument")
 
         self._engine = EngineManager(
-            engine_manager_script=ENGINE_MANAGER_SCRIPT,
             fluidsynth_host=FLUIDSYNTH_HOST,
             fluidsynth_port=FLUIDSYNTH_PORT,
             mod_host_port=MOD_HOST_PORT,

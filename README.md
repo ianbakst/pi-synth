@@ -50,11 +50,12 @@ Once a unit is flashed, push app changes to it without reflashing:
 src/synth_ui/          the control-plane app
   main.py              entry point (python -m synth_ui.main)
   config.py            paths, screen, ports, colors
-  clients/             engine_manager, mod_host_client, socket/synth clients, voice
+  clients/             engine_manager (switches engines, patches JACK), engine
+                       (Engine/ProcessEngine/ModHostEngine), jack_graph,
+                       audio_devices, mod_host/synth clients, voice
   ui/                  pygame touchscreen UI (screens, components)
 scripts/
-  engine-manager.sh    stop current engine, start the new one (called by the UI)
-  midi-connect.sh      route the keyboard's JACK MIDI to the active engine
+  start-jack.sh        pick the ALSA card + exec jackd (jack.service's ExecStart)
 systemd/               the 7 units (jack, a2jmidid, mod-host, synth-ui, ... )
 instruments/voices.json  the voice manifest
 os-image/              pi-gen custom image build (provisioning)

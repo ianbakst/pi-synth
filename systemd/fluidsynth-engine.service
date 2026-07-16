@@ -20,7 +20,8 @@ ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 \
     /home/synth/soundfonts/default.sf2
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
-# Not restarted automatically — started/stopped on demand by engine-manager.sh
+# Not restarted automatically — started/stopped on demand by the UI (EngineManager
+# via `sudo systemctl`).
 
 [Install]
 WantedBy=multi-user.target

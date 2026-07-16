@@ -157,8 +157,8 @@ class SetBfreeEngine(ProcessEngine):
 class PianoteqEngine(ProcessEngine):
     key = "pianoteq"
     jack_client = "Pianoteq"
-    # NOTE: add a pianoteq.service (RT via chrt/taskset -c 2) when Pianoteq is
-    # installed; today engine-manager.sh launches it directly.
+    # NOTE: needs a pianoteq.service (RT via chrt/taskset -c 2), added when
+    # Pianoteq is installed. Proprietary — not shipped in the image.
     unit = "pianoteq.service"
 
 
