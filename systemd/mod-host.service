@@ -2,10 +2,14 @@
 Description=mod-host LV2 Plugin Host
 After=jack.service
 Requires=jack.service
-# Cycle with JACK: a card change restarts jack, and mod-host must re-register on
-# the new server. The UI reloads the active voice afterward to re-patch.
-PartOf=jack.service
-
+# NOT enabled at boot and deliberately NOT PartOf=jack.service: mod-host is an
+# on-demand instrument engine now, started/stopped by EngineManager
+# (ModHostEngine.start/stop) exactly like fluidsynth-engine/setbfree, so it only
+# occupies core 2 while it's actually the active voice. Hardware validation found
+# that mod-host sitting there always-on alongside another core-2 engine (e.g.
+# fluidsynth) causes continuous JACK XRuns even fully idle — two RT clients on one
+# isolated core. PartOf=jack.service would also re-start mod-host on every audio
+# device change regardless of whether it should be running, undoing this.
 [Service]
 Type=simple
 User=synth
@@ -18,7 +22,7 @@ ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 \
     /usr/local/bin/mod-host -n -p 5555
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
-Restart=always
+Restart=on-failure
 RestartSec=1
 
 [Install]

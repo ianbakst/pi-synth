@@ -115,6 +115,27 @@ def test_modhost_start_clears_slot_then_loads_plugin():
     mh.load_plugin.assert_called_once_with(SFIZZ_URI, 0)
 
 
+def test_modhost_start_stop_also_manage_the_systemd_unit():
+    calls: list[list[str]] = []
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    ctx = ctx_for(mod_host=mh, systemctl=lambda argv: calls.append(argv) or 0)
+    e = ModHostEngine(SFIZZ, ctx)
+    e.start()
+    e.stop()
+    assert ["sudo", "systemctl", "start", "mod-host.service"] in calls
+    assert ["sudo", "systemctl", "stop", "mod-host.service"] in calls
+
+
+def test_modhost_start_waits_for_socket_before_loading_plugin():
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    mh.is_connected.side_effect = [False, False, True]
+    e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
+    e._wait_until_connected(timeout=1.0)
+    assert mh.is_connected.call_count == 3
+
+
 def test_modhost_swaps_plugin_on_engine_change():
     mh = MagicMock()
     mh.load_plugin.return_value = True

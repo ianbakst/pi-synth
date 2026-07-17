@@ -5,9 +5,10 @@ Each engine is either:
   - a ProcessEngine  — backed by a systemd unit (fluidsynth, setBfree, pianoteq).
     start()/stop() are `systemctl start/stop`; RT priority + core pinning come
     from the unit file, never from Python.
-  - a ModHostEngine  — an LV2 plugin in the always-running mod-host (sfizz, dexed).
-    start()/stop() are add/remove over mod-host's socket; there is no process to
-    manage.
+  - a ModHostEngine  — an LV2 plugin in mod-host (sfizz, dexed). mod-host is
+    on-demand like any ProcessEngine's unit: start()/stop() start/stop
+    mod-host.service *and* add/remove the plugin over its socket. It is not
+    always-running — see the ModHostEngine docstring for why.
 
 Reality-driven divergence from the design doc: sfizz and dexed are NOT separate
 engines. They share mod-host's single plugin slot and its stable JACK ports, so
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -57,6 +59,12 @@ def _default_systemctl(argv: list[str]) -> int:
     except subprocess.TimeoutExpired:
         logger.error("timed out: %s", " ".join(argv))
         return 1
+
+
+def _systemctl_unit(ctx: EngineContext, action: str, unit: str) -> None:
+    rc = ctx.systemctl(["sudo", "systemctl", action, unit])
+    if rc != 0:
+        logger.error("systemctl %s %s failed (rc=%d)", action, unit, rc)
 
 
 @dataclass
@@ -119,19 +127,14 @@ class ProcessEngine(Engine):
     unit: str = ""
 
     def start(self) -> None:
-        self._systemctl("start")
+        _systemctl_unit(self.ctx, "start", self.unit)
 
     def stop(self, timeout: float = 2.0) -> None:
         # systemd manages SIGTERM->SIGKILL timeout itself.
-        self._systemctl("stop")
+        _systemctl_unit(self.ctx, "stop", self.unit)
 
     def load(self, voice: Voice) -> bool:
         return True  # single-voice engines have nothing to reload
-
-    def _systemctl(self, action: str) -> None:
-        rc = self.ctx.systemctl(["sudo", "systemctl", action, self.unit])
-        if rc != 0:
-            logger.error("systemctl %s %s failed (rc=%d)", action, self.unit, rc)
 
 
 class FluidSynthEngine(ProcessEngine):
@@ -162,13 +165,23 @@ class PianoteqEngine(ProcessEngine):
     unit = "pianoteq.service"
 
 
+_MOD_HOST_START_TIMEOUT = 6.0
+
+
 class ModHostEngine(Engine):
-    """sfizz + dexed: LV2 plugins in the always-running mod-host. They share one
-    plugin slot (instance 0) and mod-host's stable JACK ports, so switching
-    between them is an in-place plugin swap, never a JACK re-patch."""
+    """sfizz + dexed: LV2 plugins hosted in mod-host. They share one plugin slot
+    (instance 0) and mod-host's stable JACK ports, so switching between them is
+    an in-place plugin swap, never a JACK re-patch.
+
+    mod-host itself is on-demand here (started/stopped like any ProcessEngine's
+    unit), not always-running: hardware validation showed mod-host sitting on
+    core 2 alongside another active instrument engine (e.g. fluidsynth) causes
+    continuous JACK XRuns even fully idle, since core 2 only has RT budget for
+    one resident engine at a time."""
 
     key = "modhost"
     jack_client = "mod-host"
+    unit = "mod-host.service"
     _instance = 0
 
     def __init__(self, voice: Voice, ctx: EngineContext):
@@ -176,12 +189,22 @@ class ModHostEngine(Engine):
         self._loaded_uri: str | None = None
 
     def start(self) -> None:
-        # mod-host is always running; "starting" this engine loads its plugin.
+        _systemctl_unit(self.ctx, "start", self.unit)
+        self._wait_until_connected()
         self._ensure_plugin(self.voice)
 
     def stop(self, timeout: float = 2.0) -> None:
         self.ctx.mod_host.remove_plugin(self._instance)
         self._loaded_uri = None
+        _systemctl_unit(self.ctx, "stop", self.unit)
+
+    def _wait_until_connected(self, timeout: float = _MOD_HOST_START_TIMEOUT) -> None:
+        deadline = time.monotonic() + timeout
+        while not self.ctx.mod_host.is_connected():
+            if time.monotonic() >= deadline:
+                logger.error("mod-host did not come up within %.1fs", timeout)
+                return
+            time.sleep(0.1)
 
     def load(self, voice: Voice) -> bool:
         if not self._ensure_plugin(voice):

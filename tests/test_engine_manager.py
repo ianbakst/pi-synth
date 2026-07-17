@@ -222,8 +222,6 @@ def test_set_audio_device_persists_restarts_and_reloads(tmp_path):
     m._audio_device_file = str(tmp_path / "dev")
     calls: list = []
     m._ctx.systemctl = lambda argv: calls.append(argv) or 0
-    m._mod_host = MagicMock()
-    m._mod_host.is_connected.return_value = True
 
     m.load_voice(GM)
     assert m.set_audio_device("Headphones") is True
@@ -237,5 +235,4 @@ def test_set_audio_device_fails_when_jack_restart_fails(tmp_path):
     m = make_mgr()
     m._audio_device_file = str(tmp_path / "dev")
     m._ctx.systemctl = lambda argv: 1          # restart fails
-    m._mod_host = MagicMock()
     assert m.set_audio_device("Headphones") is False

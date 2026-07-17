@@ -16,7 +16,6 @@ select_preset / set_gain / is_connected).
 """
 
 import logging
-import time
 
 from synth_ui.clients.audio_devices import AudioDevices, Card
 from synth_ui.clients.constants import (
@@ -143,18 +142,14 @@ class EngineManager:
         return True
 
     def _wait_audio_stack(self, timeout: float = _AUDIO_STACK_TIMEOUT) -> bool:
-        """Block until jack and mod-host are back after a restart."""
+        """Block until jack is back after a restart. mod-host is on-demand now
+        (started by ModHostEngine.start() itself, which waits for it) — nothing
+        to wait for here if it isn't the active engine."""
         if not self._jack.wait_for(
             client="system", type="audio", is_output=False, timeout=timeout
         ):
             logger.error("jack did not return after restart")
             return False
-        deadline = time.monotonic() + timeout
-        while not self._mod_host.is_connected():
-            if time.monotonic() >= deadline:
-                logger.error("mod-host did not return after jack restart")
-                return False
-            time.sleep(0.1)
         return True
 
     def _read_audio_device(self) -> str | None:

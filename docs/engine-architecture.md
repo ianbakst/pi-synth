@@ -53,13 +53,31 @@ separate cores don't run stages in parallel — the win is **jitter isolation an
 headroom** (each stage uncontended → lower buffers, fewer xruns under sustained
 load), not throughput. RT-correct for an instrument.
 
+**"Active instrument engine" is enforced to mean exactly one process, always.**
+mod-host used to be always-on (enabled at boot like jack/a2jmidid). Hardware
+validation found that having it resident on core 2 at the same time as another
+active engine (e.g. fluidsynth) causes continuous JACK XRuns — `journalctl -u
+jack | grep -c XRun` kept climbing indefinitely even with both engines fully
+idle, because two `chrt -f 80` RT clients were contending for one isolated core
+every single 2.67ms period. Stopping one of the two immediately took the xrun
+count to a steady 0. Fix: mod-host is now on-demand, exactly like
+`fluidsynth-engine`/`setbfree` — `ModHostEngine.start()`/`stop()`
+(`src/synth_ui/clients/engine.py`) start/stop `mod-host.service` around the
+add/remove-plugin socket calls, and the unit is no longer `systemctl enable`d
+at boot (`os-image/stage-pi-synth/05-services`) nor `PartOf=jack.service` (that
+would have force-restarted it — i.e. started it even when it shouldn't be
+running — on every audio-device change).
+
 **mod-host caveat:** mod-host processes all its plugins in one thread, so a single
 mod-host can't split instrument (core 2) from effects (core 3). Phase 3 runs a
 **second** mod-host pinned to core 3 for effects; until then the existing mod-host
-(instruments) sits on core 2 and core 3 stays idle.
+(instruments) sits on core 2, on-demand, and core 3 stays idle.
 
-**Validate on hardware** before trusting it: `cyclictest -m -Sp99 -i200 -l100000`
-on cores 1,2,3, and watch JACK's xrun counter over a sustained switching session.
+**Validated on hardware:** `journalctl -u jack | grep -c XRun` flat at 0 with the
+active instrument engine alone on core 2, sustained idle. Still to validate:
+`cyclictest -m -Sp99 -i200 -l100000` on cores 1,2,3 for the raw RT floor, and the
+xrun counter over a sustained voice-*switching* session (not just idle) now that
+mod-host's lifecycle changed.
 
 ## The JACK graph (data plane)
 
@@ -226,8 +244,12 @@ loads → keyboard plays, no interaction needed.
 - Fixes mod-host (sfizz/dexed) silence by explicitly wiring their audio to the
   DAC. Retire `scripts/engine-manager.sh` / `midi-connect.sh` (Python
   orchestrates via `systemctl` + `jack_*`).
-- Validate on hardware: no gap on switch, panic silences held notes, sustained
-  switching produces no xruns (per the OS-tuning validation approach).
+- *Validated on hardware:* found and fixed mod-host being always-on causing
+  continuous core-2 XRuns (see "Active instrument engine" note above) — it's
+  now on-demand like the other engines.
+- Still to validate: no gap on switch, panic silences held notes, sustained
+  *switching* produces no xruns (idle is now confirmed clean; switching load
+  hasn't been re-tested since the mod-host lifecycle change).
 
 **Phase 3 — effects rack** (see "Effects rack" above):
 - *Done (increment 1):* effect LV2 packages in `00-packages`
