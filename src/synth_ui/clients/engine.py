@@ -165,7 +165,7 @@ class PianoteqEngine(ProcessEngine):
     unit = "pianoteq.service"
 
 
-_MOD_HOST_START_TIMEOUT = 6.0
+_MOD_HOST_START_TIMEOUT = 10.0
 
 
 class ModHostEngine(Engine):
@@ -190,21 +190,28 @@ class ModHostEngine(Engine):
 
     def start(self) -> None:
         _systemctl_unit(self.ctx, "start", self.unit)
-        self._wait_until_connected()
-        self._ensure_plugin(self.voice)
+        self._load_plugin_with_retry(self.voice)
 
     def stop(self, timeout: float = 2.0) -> None:
         self.ctx.mod_host.remove_plugin(self._instance)
         self._loaded_uri = None
         _systemctl_unit(self.ctx, "stop", self.unit)
 
-    def _wait_until_connected(self, timeout: float = _MOD_HOST_START_TIMEOUT) -> None:
+    def _load_plugin_with_retry(
+        self, voice: Voice, timeout: float = _MOD_HOST_START_TIMEOUT
+    ) -> bool:
+        """A freshly-started mod-host accepts TCP connections before it's done
+        initializing (LV2 plugin world scan), so the first add can bounce with an
+        error or get no response at all. Retry the load itself, not just the
+        socket connect, until mod-host is actually ready to host a plugin."""
         deadline = time.monotonic() + timeout
-        while not self.ctx.mod_host.is_connected():
+        while True:
+            if self._ensure_plugin(voice):
+                return True
             if time.monotonic() >= deadline:
-                logger.error("mod-host did not come up within %.1fs", timeout)
-                return
-            time.sleep(0.1)
+                logger.error("mod-host did not become ready within %.1fs", timeout)
+                return False
+            time.sleep(0.2)
 
     def load(self, voice: Voice) -> bool:
         if not self._ensure_plugin(voice):

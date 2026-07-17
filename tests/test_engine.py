@@ -127,13 +127,24 @@ def test_modhost_start_stop_also_manage_the_systemd_unit():
     assert ["sudo", "systemctl", "stop", "mod-host.service"] in calls
 
 
-def test_modhost_start_waits_for_socket_before_loading_plugin():
+def test_modhost_start_retries_plugin_load_until_mod_host_is_ready():
+    # A freshly-started mod-host accepts TCP connections before it's actually
+    # ready to host a plugin, so the first add(s) can fail even though the
+    # socket is up. start() must retry the load itself, not just the connect.
     mh = MagicMock()
-    mh.load_plugin.return_value = True
-    mh.is_connected.side_effect = [False, False, True]
+    mh.load_plugin.side_effect = [False, False, True]
     e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
-    e._wait_until_connected(timeout=1.0)
-    assert mh.is_connected.call_count == 3
+    e.start()
+    assert mh.load_plugin.call_count == 3
+    assert e._loaded_uri == SFIZZ_URI
+
+
+def test_modhost_start_gives_up_after_timeout():
+    mh = MagicMock()
+    mh.load_plugin.return_value = False
+    e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
+    assert e._load_plugin_with_retry(SFIZZ, timeout=0.3) is False
+    assert mh.load_plugin.call_count > 1
 
 
 def test_modhost_swaps_plugin_on_engine_change():
