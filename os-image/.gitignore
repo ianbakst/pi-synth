@@ -6,5 +6,9 @@ kernel/dtb/
 kernel/overlays/
 kernel/*.deb
 
+# WiFi credentials baked into the image (secrets) — never committed.
+# See wifi.env.example. If present, stage 07-wifi writes a NetworkManager profile.
+wifi.env
+
 # pi-gen is fetched on demand by build.sh (pinned) — never committed.
 pi-gen/

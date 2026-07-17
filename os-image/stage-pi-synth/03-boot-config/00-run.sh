@@ -36,3 +36,8 @@ if ! grep -q "isolcpus=1,2,3" "${CMDLINE}"; then
 else
 	echo "cmdline.txt: CPU isolation already present"
 fi
+
+# Move the Linux console off the display (tty1 -> tty3): kernel + systemd boot
+# text no longer scrolls on the touchscreen. The login prompt is removed
+# separately by masking getty@tty1 (06-system-tuning). Idempotent.
+sed -i "s/\bconsole=tty1\b/console=tty3/" "${CMDLINE}"

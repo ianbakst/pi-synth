@@ -22,4 +22,9 @@ apt-get -y purge dphys-swapfile 2>/dev/null || true
 for svc in avahi-daemon triggerhappy ModemManager bluetooth hciuart cron; do
 	systemctl disable "${svc}.service" 2>/dev/null || true
 done
+
+# No console login on the display: this is a synth appliance, admin is via SSH.
+# Masking getty@tty1 removes the login prompt and frees the VT/DRM console so the
+# KMSDRM UI owns the display uncontested.
+systemctl mask getty@tty1.service 2>/dev/null || true
 EOF

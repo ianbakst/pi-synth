@@ -19,6 +19,11 @@ absolute path.
 - Your **PREEMPT_RT kernel artifacts** harvested from a working RT Pi in
   [`kernel/`](kernel/) — `kernel8.img` + the matching `modules/<KVER>/` tree
   (dtbs/overlays optional). See [kernel/README.md](kernel/README.md).
+- *(Optional)* **WiFi** — `cp wifi.env.example wifi.env` and fill in your SSID +
+  password. If `wifi.env` is present, stage `07-wifi` bakes a NetworkManager
+  profile into the image so the Pi joins WiFi on first boot. `wifi.env` is
+  gitignored (it holds your password). Absent = no WiFi preconfigured; Ethernet
+  still works.
 
 ## Build
 
