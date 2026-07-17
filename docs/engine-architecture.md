@@ -169,24 +169,40 @@ in-place reload vs. full switch.
 Same-`key` load (e.g. fluidsynth SF2 → SF2) skips all patching: just
 `active.load(voice)`.
 
-## Effects rack (mod-host)
+## Effects rack (mod-host) — `EffectsRack`
 
-mod-host already hosts instruments; it hosts effects the same way. Model an
-`EffectsRack` separate from instruments:
+A **second mod-host instance** (`systemd/mod-host-fx.service`, socket 5556, core
+3) hosts only effects, so instrument DSP (core 2) and effect DSP (core 3) never
+share a thread. `clients/effects_rack.py` (`EffectsRack`) manages the chain:
 
-- Effect plugins live at reserved mod-host instances (**instruments `0`, effects
-  `10+`**), loaded once and **persistent across instrument switches**.
-- Chain wired once: `effect[0].out → effect[1].in → … → last.out →
-  system:playback`. On an instrument switch the manager patches
-  `active_instrument.out → effects_rack.in`; the rack→DAC leg never moves.
-- Python only does `add` / `connect` / `param_set` (mix, time, cutoff…) — effect
-  DSP runs in mod-host on the effects core (3). **Watch the xrun counter**: each
-  effect adds to that core's RT budget.
-- Effect params surface as normal UI controls, like voice selection.
-- **Not** running `mod-ui` (MOD's web pedalboard editor) — too heavy/jittery for
-  a touchscreen appliance. Drive mod-host directly.
+- Effect plugins live at mod-host instances **`10+`** (instruments use `0–9`),
+  loaded once and **persistent across instrument switches**.
+- `add(uri)` appends to the chain and `_rechain()`s: `fx[0].out → fx[1].in → … →
+  fx[N].out → system:playback`. It tears down its prior wiring first (tracked in
+  `_wired`) so a stale "old last → DAC" edge never lingers. `remove`/`clear`
+  likewise re-chain. Python only patches; DSP is in mod-host.
+- `input_ports()` (first effect) / `output_ports()` (last effect) let the manager
+  route `active_instrument.out → rack.input`; the rack→DAC leg never moves.
+- **Watch the xrun counter** — each effect adds to core 3's RT budget.
+- **Not** running `mod-ui` (MOD's web pedalboard editor) — too heavy/jittery for a
+  touchscreen appliance. Drive mod-host directly.
 
-Requires effect LV2 plugins in the image (see Phase 3).
+**Two open questions that need the board** (why the routing/UI are deferred):
+
+1. **The fx mod-host's JACK client name.** Two mod-host processes both request the
+   name `mod-host`; the second is auto-suffixed (`mod-host-01`) or may fail if
+   mod-host forces the exact name. `mod-host-fx.service` ships **installed but not
+   enabled** until this is checked with `jack_lsp`.
+2. **How mod-host names a plugin instance's audio ports.** `EffectsRack._audio_ports`
+   assumes a per-instance client `effect_<instance>` — the single knob to confirm
+   and, if wrong, fix in one place. (Same class of unknown as
+   `ModHostEngine.jack_client` for the *instrument* mod-host.)
+
+**Deferred to hardware:** `EngineManager` routing (instrument → rack → DAC, and
+re-wiring the instrument when the rack goes empty↔non-empty) and the UI effects
+screen. The rack class + OS infra (effect LV2 packages, the fx service) are in
+place; the graph-patching that depends on the two answers above is not, on
+purpose.
 
 ## Startup: a working instrument on boot
 
@@ -213,11 +229,14 @@ loads → keyboard plays, no interaction needed.
 - Validate on hardware: no gap on switch, panic silences held notes, sustained
   switching produces no xruns (per the OS-tuning validation approach).
 
-**Phase 3 — effects rack:**
-- `EffectsRack` over mod-host; add effect LV2 packages to
-  `os-image/stage-pi-synth/00-base-packages/00-packages` (e.g. `lsp-plugins-lv2`,
-  `zam-plugins`, `x42-plugins`, `dragonfly-reverb-lv2`).
-- UI controls for a couple of effect params; xrun budget check.
+**Phase 3 — effects rack** (see "Effects rack" above):
+- *Done (increment 1):* effect LV2 packages in `00-packages`
+  (`calf-plugins`, `zam-plugins`, `x42-plugins`, `mda-lv2`); `mod-host-fx.service`
+  (core 3, installed not enabled); `EffectsRack` class + tests.
+- *Needs the board:* confirm the fx mod-host client name and the effect
+  audio-port naming (the two open questions above), then wire `EngineManager`
+  routing (instrument → rack → DAC) and the UI effects screen.
+- Watch the xrun budget on core 3 as effects are added.
 
 ## Open questions (from the design, still open)
 

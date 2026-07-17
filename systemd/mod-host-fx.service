@@ -1,0 +1,27 @@
+[Unit]
+Description=mod-host LV2 Plugin Host (effects rack)
+After=jack.service mod-host.service
+Requires=jack.service
+PartOf=jack.service
+
+[Service]
+Type=simple
+User=synth
+Environment=LV2_PATH=/usr/lib/lv2:/usr/local/lib/lv2
+# Core 3: the dedicated effects core. A SECOND mod-host instance (socket port
+# 5556) that hosts only effect plugins, kept off the instrument core (2).
+#
+# NOTE — confirm on hardware before enabling: two mod-host processes both try to
+# register the JACK client name "mod-host"; the second is auto-suffixed (e.g.
+# "mod-host-01") or may fail if mod-host forces the exact name. Check `jack_lsp`
+# and set EffectsRack's port discovery accordingly. This unit ships installed but
+# NOT enabled (see os-image 05-services) until that's verified on the board.
+ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 3 \
+    /usr/local/bin/mod-host -n -p 5556
+LimitRTPRIO=80
+LimitMEMLOCK=infinity
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -6,8 +6,10 @@
 # Always-on at boot:  cpu-performance, jack, a2jmidid, mod-host, synth-ui
 # On-demand (started by the UI / EngineManager via systemctl, NOT enabled):
 #                     fluidsynth-engine, setbfree
-
-for unit in cpu-performance jack a2jmidid mod-host fluidsynth-engine setbfree synth-ui; do
+# Installed but NOT enabled (Phase 3, pending hardware confirmation of its JACK
+# client name):  mod-host-fx
+for unit in cpu-performance jack a2jmidid mod-host mod-host-fx \
+            fluidsynth-engine setbfree synth-ui; do
 	install -m 644 "${PI_SYNTH_SRC}/systemd/${unit}.service" \
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"
 done
