@@ -1,3 +1,4 @@
+import os
 import threading
 
 import pygame
@@ -46,10 +47,17 @@ def _save_state(name: str) -> None:
 
 class SynthUI:
     def __init__(self):
-        # No SDL env setup needed: pygame 2 is SDL2, which uses KMSDRM for video
-        # and auto-scans /dev/input/event* for touch. Touch works as long as this
-        # process's user is in the 'input' group (see setup.sh). The old SDL 1.2
-        # vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
+        # This app never plays audio through pygame — every sound path goes
+        # through JACK (fluidsynth/mod-host) to the DAC. Without this, SDL's
+        # audio mixer opens its own ALSA PCM stream on init and, since the
+        # HiFiBerry is effectively the only playback device once onboard audio
+        # is disabled, fights jackd for it: continuous ALSA underruns and no
+        # audio actually reaching the DAC. Must be set before pygame.init().
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        # No other SDL env setup needed: pygame 2 is SDL2, which uses KMSDRM for
+        # video and auto-scans /dev/input/event* for touch. Touch works as long as
+        # this process's user is in the 'input' group (see setup.sh). The old SDL
+        # 1.2 vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
         pygame.init()
 
         if IS_PI:
