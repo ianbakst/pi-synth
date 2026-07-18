@@ -32,6 +32,23 @@ list_cards() {
 }
 have_card() { list_cards | grep -qxF "$1"; }
 
+# Wait (bounded) for a real playback card before deciding. At cold boot the I2S
+# DAC (hifiberry) enumerates a beat AFTER jack.service starts, so a one-shot
+# check finds nothing, falls to the silent dummy backend below, and never
+# recovers — Restart=always doesn't help because dummy jackd runs happily
+# forever (no crash to trigger a restart). This is the difference between "boots
+# with sound" and "boots silent until a manual jack restart". Override the cap
+# with SYNTH_JACK_CARD_WAIT (seconds); 0 disables the wait.
+CARD_WAIT="${SYNTH_JACK_CARD_WAIT:-15}"
+waited=0
+while [ -z "$(list_cards)" ] && [ "$waited" -lt "$CARD_WAIT" ]; do
+    sleep 1
+    waited=$((waited + 1))
+done
+if [ "$waited" -gt 0 ]; then
+    echo "start-jack: waited ${waited}s for an ALSA playback card to appear" >&2
+fi
+
 SAVED="$(tr -d '[:space:]' < "$DEVICE_FILE" 2>/dev/null || true)"
 
 DEVICE=""
