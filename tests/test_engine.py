@@ -83,6 +83,36 @@ def test_fluidsynth_load_and_panic_delegate_to_controller():
     fs.reset.assert_called_once()
 
 
+def test_fluidsynth_default_font_selects_instead_of_reloading(tmp_path, monkeypatch):
+    # The default soundfont is already resident (loaded at process start), so
+    # switching to it must be a preset select, NOT a second multi-hundred-MB load.
+    sf = tmp_path / "default.sf2"
+    sf.write_bytes(b"sf2")
+    monkeypatch.setattr("synth_ui.clients.engine._DEFAULT_SOUNDFONT", str(sf))
+    fs = MagicMock()
+    voice = Voice(name="General MIDI", engine="fluidsynth", path=str(sf), category="GM")
+    e = FluidSynthEngine(voice, ctx_for(fluidsynth=fs))
+    assert e.load(voice) is True
+    fs.load_soundfont.assert_not_called()
+    fs.select_preset.assert_called_once_with(0, 1, 0, 0)
+
+
+def test_fluidsynth_default_font_matches_through_symlink(tmp_path, monkeypatch):
+    # default.sf2 is a symlink to the real font on the Pi; samefile must see them
+    # as one file so the symlinked voice path still hits the fast select path.
+    real = tmp_path / "FluidR3_GM.sf2"
+    real.write_bytes(b"sf2")
+    link = tmp_path / "default.sf2"
+    link.symlink_to(real)
+    monkeypatch.setattr("synth_ui.clients.engine._DEFAULT_SOUNDFONT", str(link))
+    fs = MagicMock()
+    voice = Voice(name="GM", engine="fluidsynth", path=str(real), category="GM")
+    e = FluidSynthEngine(voice, ctx_for(fluidsynth=fs))
+    assert e.load(voice) is True
+    fs.load_soundfont.assert_not_called()
+    fs.select_preset.assert_called_once_with(0, 1, 0, 0)
+
+
 # --- port discovery / readiness ---------------------------------------------
 
 def test_ports_discovered_via_jackgraph_and_ready():

@@ -26,6 +26,7 @@ change ModHostEngine.jack_client — discovery does the rest.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -36,6 +37,7 @@ from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.synth_client import FluidSynthController
 from synth_ui.clients.voice import Voice
+from synth_ui.config import SOUNDFONT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +139,19 @@ class ProcessEngine(Engine):
         return True  # single-voice engines have nothing to reload
 
 
+# fluidsynth-engine.service launches fluidsynth with this soundfont already on
+# its command line, so it's resident as sfont 1 for the whole process lifetime.
+_DEFAULT_SOUNDFONT = os.path.join(SOUNDFONT_DIR, "default.sf2")
+
+
+def _same_file(a: str, b: str) -> bool:
+    """True if a and b are the same file (following symlinks, e.g. default.sf2)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.realpath(a) == os.path.realpath(b)
+
+
 class FluidSynthEngine(ProcessEngine):
     key = "fluidsynth"
     jack_client = "fluidsynth"
@@ -144,6 +159,14 @@ class FluidSynthEngine(ProcessEngine):
 
     def load(self, voice: Voice) -> bool:
         if not voice.path:
+            return True
+        # The startup soundfont is already resident as sfont 1 for the life of
+        # the process, so switching to the default voice is just a preset select,
+        # NOT a second (multi-hundred-MB) reload off the SD card. This is what
+        # makes "General MIDI" switch quickly instead of re-reading the whole
+        # font that fluidsynth already loaded at start.
+        if _same_file(voice.path, _DEFAULT_SOUNDFONT):
+            self.ctx.fluidsynth.select_preset(0, 1, 0, 0)
             return True
         return self.ctx.fluidsynth.load_soundfont(voice.path)
 
