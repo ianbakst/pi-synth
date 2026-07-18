@@ -260,6 +260,18 @@ loads → keyboard plays, no interaction needed.
   routing (instrument → rack → DAC) and the UI effects screen.
 - Watch the xrun budget on core 3 as effects are added.
 
+## Engine build status (image `02-audio-stack`)
+
+- **sfizz** — LV2 plugin built from `sfztools/sfizz-ui` (NOT `sfztools/sfizz`,
+  which is only the core lib + a JACK client we don't use). Verified on hardware:
+  installs `/usr/local/lib/lv2/sfizz.lv2`, URI `http://sfztools.github.io/sfizz`
+  (matches `_MODHOST_PLUGINS` in `clients/engine.py`).
+- **Dexed** — **not built yet.** The two DX7 voices in `voices.json` will fail to
+  load until a Dexed LV2 build is added to `02-audio-stack` (same
+  verify-on-hardware-then-codify path sfizz took). Its URI/param symbol in
+  `_MODHOST_PLUGINS` (`https://asb2m10.github.io/dexed`, `sysex_file`) are
+  unconfirmed until then.
+
 ## Open questions (from the design, still open)
 
 - Exact mod-host audio-out port names — confirm with `jack_lsp -t` on the Pi
