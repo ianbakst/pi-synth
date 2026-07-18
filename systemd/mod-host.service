@@ -18,8 +18,16 @@ Environment=LV2_PATH=/usr/lib/lv2:/usr/local/lib/lv2
 # Core 2: the instrument engine core. mod-host hosts the active sfizz/dexed
 # instrument here. (A second mod-host for effects on core 3 comes in Phase 3 —
 # see docs/engine-architecture.md.)
-ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 \
-    /usr/local/bin/mod-host -n -p 5555
+#
+# No `chrt` here (unlike the other engines): mod-host does its own heavy work —
+# instantiating plugins and loading large sample libraries. At SCHED_FIFO on an
+# isolcpus+nohz_full core that CPU-bound load never yields and wedges the core
+# (RCU stall, then SIGKILL). JACK already schedules the audio callback real-time
+# on its own, so we only need affinity here; the loader threads stay preemptible
+# at normal priority. Verified on hardware: alone on core 2 (the design
+# guarantees one active engine), add + big-SFZ load complete in <1s with no
+# wedge, and JACK still gives the process an FF (RT) audio thread.
+ExecStart=/usr/bin/taskset -c 2 /usr/local/bin/mod-host -n -p 5555
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
 Restart=on-failure

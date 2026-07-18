@@ -41,11 +41,19 @@ from synth_ui.config import SOUNDFONT_DIR
 
 logger = logging.getLogger(__name__)
 
-# LV2 plugin URIs and the LV2 symbol for their instrument-file parameter.
-# Verify URIs with `lv2ls` on the Pi after installation.
+# engine -> (plugin URI, LV2 patch-property URI for its instrument file).
+# The instrument file is an atom-based patch:writable property, loaded via
+# mod-host `patch_set` — NOT a control port (param_set silently no-ops). The
+# sfizz values are confirmed on hardware (jack_lsp / mod-host logs). Verify plugin
+# URIs with `lv2ls`.
 _MODHOST_PLUGINS: dict[str, tuple[str, str]] = {
-    "sfizz": ("http://sfztools.github.io/sfizz", "sfz_file"),
-    "dexed": ("https://asb2m10.github.io/dexed", "sysex_file"),
+    "sfizz": (
+        "http://sfztools.github.io/sfizz",
+        "http://sfztools.github.io/sfizz:sfzfile",
+    ),
+    # TODO(dexed): unbuilt, and its .syx-load property URI is unverified on
+    # hardware. Empty file-property => plugin loads but no cartridge is set.
+    "dexed": ("https://asb2m10.github.io/dexed", ""),
 }
 
 # Runs `sudo systemctl <action> <unit>` and returns the exit code. Injectable so
@@ -254,10 +262,14 @@ class ModHostEngine(Engine):
     def load(self, voice: Voice) -> bool:
         if not self._ensure_plugin(voice):
             return False
-        _, symbol = _MODHOST_PLUGINS[voice.engine]
-        if not voice.path:
+        _, file_property = _MODHOST_PLUGINS[voice.engine]
+        if not voice.path or not file_property:
             return True
-        return self.ctx.mod_host.set_param(self._instance, symbol, f"'{voice.path}'")
+        # The instrument file is an LV2 patch property (atom), set via patch_set.
+        # param_set can't reach it — that was why sfizz loaded but stayed on its
+        # default instrument (silent). No quotes: mod-host takes the rest of the
+        # line as the value.
+        return self.ctx.mod_host.patch_set(self._instance, file_property, voice.path)
 
     def _ensure_plugin(self, voice: Voice) -> bool:
         """Load the plugin for this voice, swapping the current one if different."""

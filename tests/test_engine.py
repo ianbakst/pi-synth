@@ -180,27 +180,31 @@ def test_modhost_start_gives_up_after_timeout():
 def test_modhost_swaps_plugin_on_engine_change():
     mh = MagicMock()
     mh.load_plugin.return_value = True
-    mh.set_param.return_value = True
+    mh.patch_set.return_value = True
     e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
     e.start()             # sfizz loaded
     mh.reset_mock()
     assert e.load(DEXED) is True   # in-place switch to dexed
     mh.remove_plugin.assert_called_once_with(0)
     mh.load_plugin.assert_called_once_with(DEXED_URI, 0)
-    mh.set_param.assert_called_once_with(0, "sysex_file", "'/dx/ep.syx'")
+    # dexed's file-load property URI is unverified (empty) -> no patch_set yet
+    mh.patch_set.assert_not_called()
 
 
-def test_modhost_same_plugin_only_sets_param():
+def test_modhost_same_plugin_only_sets_the_instrument_file():
     mh = MagicMock()
     mh.load_plugin.return_value = True
-    mh.set_param.return_value = True
+    mh.patch_set.return_value = True
     e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
     e.start()
     mh.reset_mock()
     assert e.load(SFIZZ2) is True  # different sfizz voice, same plugin
     mh.load_plugin.assert_not_called()
     mh.remove_plugin.assert_not_called()
-    mh.set_param.assert_called_once_with(0, "sfz_file", "'/sfz/p2.sfz'")
+    # SFZ file is a patch property loaded via patch_set (not param_set), unquoted
+    mh.patch_set.assert_called_once_with(
+        0, "http://sfztools.github.io/sfizz:sfzfile", "/sfz/p2.sfz"
+    )
 
 
 def test_modhost_audio_ports_discovered_under_effect_instance_client():
@@ -234,4 +238,4 @@ def test_modhost_load_fails_when_plugin_add_fails():
     mh.load_plugin.return_value = False
     e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
     assert e.load(SFIZZ) is False
-    mh.set_param.assert_not_called()
+    mh.patch_set.assert_not_called()
