@@ -24,10 +24,16 @@ NPERIODS="${SYNTH_JACK_NPERIODS:-2}"
 # Core 1: JACK's ALSA backend runs alone on the first isolated core.
 JACK="/usr/bin/chrt -f 90 /usr/bin/taskset -c 1 /usr/bin/jackd"
 
-# Playback card ids (stable names), one per line, de-duplicated.
+# Playback card ids (stable names), one per line, de-duplicated. The Pi's HDMI
+# audio devices (vc4hdmi0/1) are excluded: this is a HifiBerry appliance, HDMI
+# audio is never the target, and — critically — they're always present and
+# enumerate BEFORE the I2S DAC at cold boot. Without excluding them the card-wait
+# below trips on HDMI, then jackd picks it, fails to open it, and the whole audio
+# stack collapses (jack exits 255 → a2jmidid/mod-host cascade-fail).
 list_cards() {
     aplay -l 2>/dev/null \
         | sed -nE 's/^card [0-9]+: ([^ ]+) \[.*/\1/p' \
+        | grep -v '^vc4hdmi' \
         | awk '!seen[$0]++'
 }
 have_card() { list_cards | grep -qxF "$1"; }
