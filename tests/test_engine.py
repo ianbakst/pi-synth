@@ -203,6 +203,22 @@ def test_modhost_same_plugin_only_sets_param():
     mh.set_param.assert_called_once_with(0, "sfz_file", "'/sfz/p2.sfz'")
 
 
+def test_modhost_audio_ports_discovered_under_effect_instance_client():
+    # mod-host puts a plugin instance's audio under "effect_<instance>", not
+    # "mod-host" (that's only the shared MIDI in). Confirmed on hardware.
+    jack = FakeJack(
+        {
+            ("mod-host", "midi", False): ["mod-host:midi_in"],
+            ("effect_0", "audio", True): ["effect_0:out_left", "effect_0:out_right"],
+        }
+    )
+    e = ModHostEngine(SFIZZ, ctx_for(jack=jack))
+    assert e.audio_client == "effect_0"
+    assert e.midi_port == "mod-host:midi_in"
+    assert e.audio_out_ports == ["effect_0:out_left", "effect_0:out_right"]
+    assert e.is_ready() is True
+
+
 def test_modhost_stop_removes_plugin():
     mh = MagicMock()
     mh.load_plugin.return_value = True

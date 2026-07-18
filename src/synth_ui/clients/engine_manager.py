@@ -174,7 +174,7 @@ class EngineManager:
         new = engine_cls(voice, self._ctx)
         new.start()
         if not self._jack.wait_for(
-            client=new.jack_client,
+            client=new.audio_client,
             type="audio",
             is_output=True,
             timeout=_READY_TIMEOUT,

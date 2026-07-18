@@ -79,6 +79,10 @@ class _Rec:
         return self.ready
 
     @property
+    def audio_client(self):
+        return self.jack_client
+
+    @property
     def midi_port(self):
         return self.midi
 

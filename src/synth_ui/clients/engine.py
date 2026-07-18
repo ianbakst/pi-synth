@@ -110,6 +110,13 @@ class Engine(ABC):
         (stop/remove) silences it anyway, so the base is a no-op."""
 
     @property
+    def audio_client(self) -> str:
+        """JACK client under which this engine's audio OUTPUT ports register.
+        Same as jack_client for most engines; mod-host plugins differ (their
+        audio lives under a per-instance client), so they override this."""
+        return self.jack_client
+
+    @property
     def midi_port(self) -> str | None:
         ports = self.ctx.jack.ports(
             client=self.jack_client, type="midi", is_output=False
@@ -119,7 +126,7 @@ class Engine(ABC):
     @property
     def audio_out_ports(self) -> list[str]:
         return self.ctx.jack.ports(
-            client=self.jack_client, type="audio", is_output=True
+            client=self.audio_client, type="audio", is_output=True
         )
 
 
@@ -203,13 +210,21 @@ class ModHostEngine(Engine):
     one resident engine at a time."""
 
     key = "modhost"
-    jack_client = "mod-host"
+    jack_client = "mod-host"      # MIDI arrives at the shared mod-host:midi_in
     unit = "mod-host.service"
     _instance = 0
 
     def __init__(self, voice: Voice, ctx: EngineContext):
         super().__init__(voice, ctx)
         self._loaded_uri: str | None = None
+
+    @property
+    def audio_client(self) -> str:
+        # mod-host registers each plugin instance's AUDIO ports under a per-
+        # instance client "effect_<instance>" (confirmed on hardware via
+        # jack_lsp: effect_0:out_left / effect_0:out_right). Only audio differs;
+        # MIDI still comes in on the shared mod-host:midi_in (jack_client).
+        return f"effect_{self._instance}"
 
     def start(self) -> None:
         _systemctl_unit(self.ctx, "start", self.unit)
