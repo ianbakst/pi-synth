@@ -228,11 +228,21 @@ class ModHostEngine(Engine):
 
     @property
     def audio_client(self) -> str:
-        # mod-host registers each plugin instance's AUDIO ports under a per-
-        # instance client "effect_<instance>" (confirmed on hardware via
-        # jack_lsp: effect_0:out_left / effect_0:out_right). Only audio differs;
-        # MIDI still comes in on the shared mod-host:midi_in (jack_client).
+        # mod-host registers each plugin instance's ports under a per-instance
+        # client "effect_<instance>" (confirmed on hardware via jack_lsp).
         return f"effect_{self._instance}"
+
+    @property
+    def midi_port(self) -> str | None:
+        # sfizz/dexed receive MIDI on the plugin instance's own atom/control port
+        # (effect_<instance>:control), NOT the shared mod-host:midi_in — mod-host
+        # does not forward its midi_in into the hosted plugin here, so wiring the
+        # keyboard to mod-host:midi_in was a silent dead end. Confirmed on
+        # hardware: connecting to effect_0:control is what makes notes sound.
+        ports = self.ctx.jack.ports(
+            client=self.audio_client, type="midi", is_output=False
+        )
+        return ports[0] if ports else None
 
     def start(self) -> None:
         _systemctl_unit(self.ctx, "start", self.unit)

@@ -207,18 +207,19 @@ def test_modhost_same_plugin_only_sets_the_instrument_file():
     )
 
 
-def test_modhost_audio_ports_discovered_under_effect_instance_client():
-    # mod-host puts a plugin instance's audio under "effect_<instance>", not
-    # "mod-host" (that's only the shared MIDI in). Confirmed on hardware.
+def test_modhost_ports_discovered_under_effect_instance_client():
+    # mod-host puts a plugin instance's ports — MIDI in (control) AND audio out —
+    # under "effect_<instance>", not "mod-host". mod-host:midi_in is a dead end
+    # that never reaches the plugin. Confirmed on hardware.
     jack = FakeJack(
         {
-            ("mod-host", "midi", False): ["mod-host:midi_in"],
+            ("effect_0", "midi", False): ["effect_0:control"],
             ("effect_0", "audio", True): ["effect_0:out_left", "effect_0:out_right"],
         }
     )
     e = ModHostEngine(SFIZZ, ctx_for(jack=jack))
     assert e.audio_client == "effect_0"
-    assert e.midi_port == "mod-host:midi_in"
+    assert e.midi_port == "effect_0:control"
     assert e.audio_out_ports == ["effect_0:out_left", "effect_0:out_right"]
     assert e.is_ready() is True
 
