@@ -23,6 +23,19 @@ for svc in avahi-daemon triggerhappy ModemManager bluetooth hciuart cron; do
 	systemctl disable "${svc}.service" 2>/dev/null || true
 done
 
+# Don't block boot waiting for the network to come "online": the audio stack
+# doesn't need the network, this alone costs ~7s of boot, and it can hang boot
+# outright if WiFi is flaky. NetworkManager itself still runs — boot just doesn't
+# wait for it (WiFi/SSH come up normally, a moment later).
+systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+
+# Boot-time one-shots not wanted on a fixed appliance: the bootloader-EEPROM
+# auto-update check (no surprise firmware changes) and the ext4 online-scrub
+# reaper (there's no LVM here for it to act on).
+for svc in rpi-eeprom-update e2scrub_reap; do
+	systemctl disable "${svc}.service" 2>/dev/null || true
+done
+
 # No console login on the display: this is a synth appliance, admin is via SSH.
 # Masking getty@tty1 removes the login prompt and frees the VT/DRM console so the
 # KMSDRM UI owns the display uncontested.
