@@ -21,8 +21,13 @@ done
 
 on_chroot << 'EOF'
 set -e
-# Stock fluidsynth.service grabs port 9800 / the audio device — keep it out.
+# Stock fluidsynth.service (Debian's packaged service) grabs port 9800 and the
+# audio device, which blocks our fluidsynth-engine from binding its shell server
+# (EADDRINUSE) and starves the DAC. Pi OS ships it as BOTH a system unit and a
+# per-user unit, so mask both — masking only the system one lets the user unit
+# respawn and squat 9800.
 systemctl mask fluidsynth.service 2>/dev/null || true
+systemctl --global mask fluidsynth.service 2>/dev/null || true
 
 systemctl enable cpu-performance.service
 systemctl enable jack.service
