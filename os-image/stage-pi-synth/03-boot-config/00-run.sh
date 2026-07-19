@@ -23,6 +23,23 @@ else
 	echo "config.txt: pi-synth block already present"
 fi
 
+# --- Disable HDMI audio (the vc4hdmi0/1 ALSA cards) ---
+# This appliance outputs only through the HiFiBerry DAC and its touchscreen isn't
+# HDMI, so the KMS driver's HDMI audio codecs are pure clutter — they appear as
+# ALSA playback cards and (before start-jack.sh filtered them) even got picked at
+# boot, crashing the audio stack. `,noaudio` on the vc4-kms-v3d overlay stops
+# them registering at all. Only touches HDMI *audio*; HDMI display is unaffected.
+if grep -qE "^dtoverlay=vc4-kms-v3d" "${CONFIG}"; then
+	if ! grep -qE "^dtoverlay=vc4-kms-v3d[^[:space:]]*noaudio" "${CONFIG}"; then
+		sed -i -E "s/^(dtoverlay=vc4-kms-v3d[^[:space:]]*)/\1,noaudio/" "${CONFIG}"
+		echo "config.txt: disabled HDMI audio (vc4-kms-v3d,noaudio)"
+	else
+		echo "config.txt: HDMI audio already disabled"
+	fi
+else
+	echo "config.txt: no vc4-kms-v3d overlay — HDMI audio not present to disable"
+fi
+
 # --- cmdline.txt: isolate cores 2,3 for JACK/engines + quiet boot ---
 # Single-line file; append our args once if not already there.
 # Isolate cores 1,2,3 for audio: core 1 = JACK, core 2 = instrument engine,
