@@ -45,8 +45,14 @@ the normal scheduler.
 |---|---|---|---|
 | **0** | OS + UI + all general IRQs | no | `synth-ui.service` `taskset -c 0` `Nice=5`; `cpu-performance.service` sets IRQ mask 1 |
 | **1** | JACK backend (audio heartbeat) + MIDI bridge + audio IRQ | yes | `jack.service` / `a2jmidid.service` `taskset -c 1`; audio IRQ steered by `cpu-performance.service` |
-| **2** | Active instrument engine | yes | `fluidsynth-engine`/`setbfree`/`mod-host`/pianoteq `taskset -c 2` |
-| **3** | Effects (reserved) | yes | effects mod-host `taskset -c 3` — **Phase 3** |
+| **2** | Active instrument engine | yes | `fluidsynth-engine`/`setbfree`/pianoteq `taskset -c 2`; `mod-host` also uses this core (see below) |
+| **3** | Currently: mod-host overflow. Later: effects | yes | `mod-host` `taskset -c 2,3` today; a *second* mod-host for effects — **Phase 3, not yet built** — would also want this core |
+
+Deliberately **not** core 0: that's where `isolcpus`/`nohz_full` route every general
+IRQ, kernel housekeeping thread, and the UI, on purpose — audio sharing it would
+be exposed to exactly the noise the isolation exists to prevent, and risks
+starving the same core SSH/D-Bus run on. Confirmed not worth it on hardware (see
+"Active instrument engine" below).
 
 **Why this, and what it buys:** the chain `engine → effects → DAC` is *serial*, so
 separate cores don't run stages in parallel — the win is **jitter isolation and
@@ -69,15 +75,37 @@ would have force-restarted it — i.e. started it even when it shouldn't be
 running — on every audio-device change).
 
 **mod-host caveat:** mod-host processes all its plugins in one thread, so a single
-mod-host can't split instrument (core 2) from effects (core 3). Phase 3 runs a
-**second** mod-host pinned to core 3 for effects; until then the existing mod-host
-(instruments) sits on core 2, on-demand, and core 3 stays idle.
+mod-host can't split instrument from effects onto separate cores. **Core 3's role
+has changed from the original plan**: rather than sit idle waiting for Phase 3,
+the instrument mod-host now spans cores 2+3 (`taskset -c 2,3`), because a large
+SFZ's sample streaming/decode work was contending with JACK's own callback
+thread for core 2 alone — a real, measured problem (below), not a hypothetical
+one. **This means Phase 3's plan needs revisiting**: a second mod-host wanting
+sole use of core 3 for effects would recreate the exact single-core contention
+this fix just solved. Options when that's built: give effects core 3 back and
+accept the instrument-side regression, find a third core to shuffle things onto,
+or reconsider whether effects need a dedicated core at all. Not decided — flag
+this when Phase 3 effects routing actually starts.
 
-**Validated on hardware:** `journalctl -u jack | grep -c XRun` flat at 0 with the
-active instrument engine alone on core 2, sustained idle. Still to validate:
-`cyclictest -m -Sp99 -i200 -l100000` on cores 1,2,3 for the raw RT floor, and the
-xrun counter over a sustained voice-*switching* session (not just idle) now that
-mod-host's lifecycle changed.
+**Validated on hardware:**
+- `journalctl -u jack | grep -c XRun` flat at 0 with the active instrument engine
+  alone on core 2, sustained idle.
+- mod-host on core 2 alone, streaming a large SFZ (641 regions) under sustained
+  play: ~180 xruns/min despite only ~40-60% CPU — confirming RT audio is
+  deadline-per-callback bound, not average-utilization bound; CPU headroom does
+  not predict xrun-freedom when a core is shared or contended.
+- Same scenario, mod-host expanded to cores 2,3 (`taskset -c 2,3`, still no
+  `chrt`): ~65 xruns/min — real improvement, not a full fix (remaining stalls are
+  first-touch SD sample reads on this specific library/hardware, not scheduling).
+- Re-adding `chrt -f 80` to mod-host on 2,3 was tested and made things
+  dramatically worse (~14,500 xruns/min, audible buzzing): it raised mod-host's
+  decode threads above JACK's own callback-thread priority, causing them to
+  preempt it — a priority inversion. Confirms mod-host should stay affinity-only,
+  no `chrt`, matching the SIGKILL/RCU-stall wedge found earlier under heavy load.
+
+Still to validate: `cyclictest -m -Sp99 -i200 -l100000` on cores 1,2,3 for the
+raw RT floor, and the xrun counter over a sustained voice-*switching* session
+(not just idle) now that mod-host's lifecycle changed.
 
 ## The JACK graph (data plane)
 
@@ -168,7 +196,9 @@ class Engine(ABC):
 **Reality-driven divergence:** sfizz and dexed are *not* separate engines — they
 share mod-host's single plugin slot and its stable JACK ports. They collapse into
 one `ModHostEngine` whose `load(voice)` swaps the plugin (remove+add if the URI
-differs) and `param_set`s the file. Switching sfizz↔dexed is therefore an
+differs) and `patch_set`s the instrument file (an LV2 patch property — sfizz's
+SFZ path is atom-based, not a control port; `param_set` silently no-ops on it).
+Switching sfizz↔dexed is therefore an
 in-mod-host swap with **no JACK re-patch** (the ports don't move). The manager
 uses `engine.key` (`fluidsynth`/`setbfree`/`pianoteq`/`modhost`) to decide
 in-place reload vs. full switch.
@@ -189,9 +219,12 @@ Same-`key` load (e.g. fluidsynth SF2 → SF2) skips all patching: just
 
 ## Effects rack (mod-host) — `EffectsRack`
 
-A **second mod-host instance** (`systemd/mod-host-fx.service`, socket 5556, core
-3) hosts only effects, so instrument DSP (core 2) and effect DSP (core 3) never
-share a thread. `clients/effects_rack.py` (`EffectsRack`) manages the chain:
+A **second mod-host instance** (`systemd/mod-host-fx.service`, socket 5556) was
+planned for core 3 so instrument DSP and effect DSP never share a thread — **that
+plan now conflicts with core allocation reality**: the instrument mod-host uses
+cores 2+3 (see "CPU core allocation" above), so core 3 is no longer free/idle.
+Not resolved; revisit before wiring this in. `clients/effects_rack.py`
+(`EffectsRack`) manages the chain:
 
 - Effect plugins live at mod-host instances **`10+`** (instruments use `0–9`),
   loaded once and **persistent across instrument switches**.

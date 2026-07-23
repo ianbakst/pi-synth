@@ -15,19 +15,31 @@ Type=simple
 User=synth
 # /usr/local/lib/lv2 is where source-built sfizz/Dexed plugins install.
 Environment=LV2_PATH=/usr/lib/lv2:/usr/local/lib/lv2
-# Core 2: the instrument engine core. mod-host hosts the active sfizz/dexed
-# instrument here. (A second mod-host for effects on core 3 comes in Phase 3 —
-# see docs/engine-architecture.md.)
+# Cores 2,3: the instrument engine cores. mod-host hosts the active sfizz/dexed
+# instrument here. Given both (there's no separate effects mod-host running yet —
+# Phase 3 is dormant, see docs/engine-architecture.md): decode/streaming work
+# (e.g. a large SFZ's sample reads) no longer has to share a single core with
+# JACK's own callback thread, which was causing frequent xruns even with CPU
+# headroom to spare (RT audio is deadline-bound per callback, not
+# average-utilization-bound). Verified on hardware: xruns during sustained
+# playback dropped from ~180/min to ~65/min moving 2 -> 2,3.
 #
 # No `chrt` here (unlike the other engines): mod-host does its own heavy work —
 # instantiating plugins and loading large sample libraries. At SCHED_FIFO on an
 # isolcpus+nohz_full core that CPU-bound load never yields and wedges the core
-# (RCU stall, then SIGKILL). JACK already schedules the audio callback real-time
-# on its own, so we only need affinity here; the loader threads stay preemptible
-# at normal priority. Verified on hardware: alone on core 2 (the design
-# guarantees one active engine), add + big-SFZ load complete in <1s with no
-# wedge, and JACK still gives the process an FF (RT) audio thread.
-ExecStart=/usr/bin/taskset -c 2 /usr/local/bin/mod-host -n -p 5555
+# (RCU stall, then SIGKILL) — reproduced twice on hardware, including once while
+# re-adding chrt specifically to test whether it would help throughput (it made
+# xruns catastrophically worse: RT-priority decode threads preempted JACK's own
+# lower-priority callback thread, a priority inversion). JACK already schedules
+# the audio callback real-time on its own, so we only need affinity here; the
+# loader/decode threads stay preemptible at normal priority.
+#
+# Do NOT extend this to core 0: that core is deliberately where isolcpus/
+# nohz_full route every general IRQ, kernel housekeeping thread, and the UI —
+# it's the noisiest core in the system by design, and sharing it here would
+# expose audio rendering to exactly what the isolation exists to prevent (and
+# risks starving the same core SSH/D-Bus depend on).
+ExecStart=/usr/bin/taskset -c 2,3 /usr/local/bin/mod-host -n -p 5555
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
 Restart=on-failure
