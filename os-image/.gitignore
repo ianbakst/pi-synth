@@ -1,10 +1,13 @@
 # Harvested RT kernel artifacts (large, board-specific — provide them locally).
 # See kernel/README.md. Use Git LFS if you want them version-controlled.
-kernel/*.img
-kernel/modules/
-kernel/dtb/
-kernel/overlays/
-kernel/*.deb
+# Board targets live in subdirectories (kernel/pi4/, kernel/cm5/, ...) — the
+# trailing /** covers artifacts at any depth under kernel/, not just direct
+# children, so a new board subdirectory is excluded without editing this file.
+kernel/**/*.img
+kernel/**/modules/
+kernel/**/dtb/
+kernel/**/overlays/
+kernel/**/*.deb
 
 # WiFi credentials baked into the image (secrets) — never committed.
 # See wifi.env.example. If present, stage 07-wifi writes a NetworkManager profile.
