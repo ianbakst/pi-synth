@@ -18,12 +18,13 @@
 #
 # Prerequisites:
 #   - Docker running (Docker Desktop on macOS; Apple Silicon builds arm64 natively).
-#   - Your harvested PREEMPT_RT kernel artifacts in os-image/kernel/ (kernel8.img
-#     + modules/<KVER>/; see os-image/kernel/README.md).
+#   - Your harvested PREEMPT_RT kernel artifacts in os-image/kernel/ — layout is
+#     board-dependent, see os-image/kernel/README.md.
 #
 # Usage:
-#   ./build.sh            # full build
-#   CONTINUE=1 ./build.sh # resume after a failed/interrupted stage
+#   ./build.sh                     # full build, board defaults to pi4
+#   PI_SYNTH_BOARD=cm5 ./build.sh  # build for the CM5 instead
+#   CONTINUE=1 ./build.sh          # resume after a failed/interrupted stage
 #
 # Output image lands in os-image/pi-gen/deploy/ (gitignored).
 
@@ -33,6 +34,13 @@ die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OS_IMAGE="${REPO}/os-image"
+
+PI_SYNTH_BOARD="${PI_SYNTH_BOARD:-pi4}"
+case "${PI_SYNTH_BOARD}" in
+    pi4) KDIR="${OS_IMAGE}/kernel" ;;
+    cm5) KDIR="${OS_IMAGE}/kernel/cm5" ;;
+    *) die "unknown PI_SYNTH_BOARD '${PI_SYNTH_BOARD}' (expected pi4 or cm5)" ;;
+esac
 
 command -v docker >/dev/null 2>&1 || die "docker not found. Install/start Docker Desktop."
 docker info >/dev/null 2>&1 || die "docker daemon not reachable. Start Docker."
@@ -54,16 +62,17 @@ fi
 
 # Validate the harvested RT kernel artifacts (see os-image/kernel/README.md).
 shopt -s nullglob
-imgs=("${OS_IMAGE}"/kernel/kernel8.img "${OS_IMAGE}"/kernel/*.img)
-moddirs=("${OS_IMAGE}"/kernel/modules/*/)
+imgs=("${KDIR}"/*.img)
+moddirs=("${KDIR}"/modules/*/)
 shopt -u nullglob
 [ "${#imgs[@]}" -gt 0 ] || \
-    die "no kernel image in os-image/kernel/ (expected kernel8.img). Harvest it from your Pi — see os-image/kernel/README.md."
+    die "no kernel image in ${KDIR#"${REPO}"/}/ for board '${PI_SYNTH_BOARD}'. Harvest it — see os-image/kernel/README.md."
 [ "${#moddirs[@]}" -gt 0 ] || \
-    die "no modules/<version> tree in os-image/kernel/modules/. rsync /lib/modules/\$(uname -r) from your Pi — see os-image/kernel/README.md."
+    die "no modules/<version> tree in ${KDIR#"${REPO}"/}/modules/. rsync /lib/modules/\$(uname -r) — see os-image/kernel/README.md."
 [ "${#moddirs[@]}" -eq 1 ] || \
-    die "multiple module trees in os-image/kernel/modules/ (${moddirs[*]##*/modules/}). Leave exactly one."
+    die "multiple module trees in ${KDIR#"${REPO}"/}/modules/ (${moddirs[*]##*/modules/}). Leave exactly one."
 
+echo "Board:                   ${PI_SYNTH_BOARD}"
 echo "Using RT kernel image:   $(basename "${imgs[0]}")"
 echo "Using RT kernel modules: $(basename "${moddirs[0]%/}")"
 
@@ -77,8 +86,10 @@ if [ "${CONTINUE:-0}" != "1" ]; then
     docker rm -v pigen_work >/dev/null 2>&1 && echo "Removed stale pigen_work container" || true
 fi
 
-# Expose this repo to the container. The config references /pi-synth-src.
-export PIGEN_DOCKER_OPTS="-v ${REPO}:/pi-synth-src:ro ${PIGEN_DOCKER_OPTS:-}"
+# Expose this repo to the container, and pass the board selection through as an
+# env var — os-image/config (sourced inside the container) reads it from there
+# and re-exports it for the stage scripts, mirroring how PI_SYNTH_SRC works.
+export PIGEN_DOCKER_OPTS="-v ${REPO}:/pi-synth-src:ro -e PI_SYNTH_BOARD=${PI_SYNTH_BOARD} ${PIGEN_DOCKER_OPTS:-}"
 
 echo "Mounting repo read-only into build container at /pi-synth-src"
 cd "${OS_IMAGE}/pi-gen"

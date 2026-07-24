@@ -9,7 +9,17 @@
 # variables consumed by our stage scripts must be `export`ed (run.sh scripts are
 # executed as child processes).
 
-IMG_NAME='pi-synth'
+# Board target: ../build.sh sets this (default pi4) and passes it into the
+# container via `-e`; re-export it so stage scripts (run as child processes)
+# can read it too. Determines the RT kernel source layout (kernel/ vs
+# kernel/cm5/, see os-image/kernel/README.md) and the boot kernel filename
+# (kernel8.img vs kernel_2712.img) in stage 01-realtime-kernel.
+export PI_SYNTH_BOARD="${PI_SYNTH_BOARD:-pi4}"
+case "${PI_SYNTH_BOARD}" in
+    pi4) IMG_NAME='pi-synth' ;;          # unchanged filename for existing pi4 users
+    cm5) IMG_NAME='pi-synth-cm5' ;;
+    *) echo "config: unknown PI_SYNTH_BOARD '${PI_SYNTH_BOARD}' (expected pi4 or cm5)" >&2; exit 1 ;;
+esac
 RELEASE='bookworm'                 # must match the pinned pi-gen branch (bookworm-arm64)
 
 # --- First user: MUST be 'synth' ---

@@ -16,9 +16,10 @@ absolute path.
 
 - **Docker** running (Docker Desktop on macOS; Apple Silicon builds the arm64
   target natively and fast — Intel falls back to qemu).
-- Your **PREEMPT_RT kernel artifacts** harvested from a working RT Pi in
-  [`kernel/`](kernel/) — `kernel8.img` + the matching `modules/<KVER>/` tree
-  (dtbs/overlays optional). See [kernel/README.md](kernel/README.md).
+- Your **PREEMPT_RT kernel artifacts** harvested from a working RT board in
+  [`kernel/`](kernel/) — layout and required filename are board-specific
+  (`kernel8.img` for pi4, `kernel_2712.img` under `kernel/cm5/` for cm5). See
+  [kernel/README.md](kernel/README.md).
 - *(Optional)* **WiFi** — `cp wifi.env.example wifi.env` and fill in your SSID +
   password. If `wifi.env` is present, stage `07-wifi` bakes a NetworkManager
   profile into the image so the Pi joins WiFi on first boot. `wifi.env` is
@@ -32,13 +33,16 @@ git clone https://github.com/ianbakst/pi-synth.git
 cd pi-synth
 # harvest your RT kernel into os-image/kernel/ (see kernel/README.md)
 cd os-image
-./build.sh          # fetches + pins pi-gen on first run, then builds
+./build.sh                       # pi4 (default): fetches + pins pi-gen, then builds
+PI_SYNTH_BOARD=cm5 ./build.sh    # or build for the CM5 instead
 ```
 
 `build.sh` clones pi-gen (pinned) into `os-image/pi-gen/` the first time — no
 submodule, no `--recursive` needed.
 
-The image lands in `os-image/pi-gen/deploy/` as `*-pi-synth.img.xz`.
+The image lands in `os-image/pi-gen/deploy/` as `*-pi-synth.img.xz` (pi4) or
+`*-pi-synth-cm5.img.xz` (cm5) — the board-specific name means both can be built
+without one overwriting the other.
 
 ### Iterating
 
@@ -75,9 +79,9 @@ sustained voice-switching session.
 | Stage | Responsibility |
 |---|---|
 | `00-base-packages` | apt packages + jackd2 RT-limits debconf preseed |
-| `01-realtime-kernel` | install harvested RT `kernel8.img` + modules, `depmod` |
+| `01-realtime-kernel` | install harvested RT kernel (board-specific filename, see `PI_SYNTH_BOARD`) + modules, `depmod` |
 | `02-audio-stack` | build + install mod-host and sfizz (LV2) from source |
-| `03-boot-config` | `config.txt` (HiFiBerry DAC, disable BT/onboard audio) + `cmdline.txt` (isolate cores 2,3; quiet boot) |
+| `03-boot-config` | `config.txt` (HiFiBerry DAC, disable BT/onboard audio, HDMI audio) + `cmdline.txt` (isolate cores 1,2,3; quiet boot) |
 | `04-pi-synth-app` | vendor app to `/home/synth/synth`, dirs, `default.sf2`, sudoers |
 | `05-services` | install 7 units; enable always-on ones; mask stock fluidsynth |
 | `06-system-tuning` | RT limits, RAM-only journald, no swap, disable jitter services |
