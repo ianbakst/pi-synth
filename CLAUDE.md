@@ -89,7 +89,11 @@ These are already configured on the Pi and should NOT be changed:
 - Swap disabled
 - `/etc/security/limits.conf` has `@audio - rtprio 99` and `@audio - memlock unlimited`
 - User `synth` is in `audio` group
-- Unnecessary services disabled (bluetooth, avahi, cron, timers, etc.)
+- Unnecessary services disabled (bluetooth, cron, timers, etc.). **Exception:**
+  avahi-daemon (mDNS) is deliberately left *enabled* — it publishes
+  `<hostname>.local` (e.g. `synth.local`) so the board is reachable without
+  hunting for its IP. It does no hardware polling and never touches the
+  isolated audio cores, so it was judged not to add meaningful RT jitter.
 
 ## Project Structure
 

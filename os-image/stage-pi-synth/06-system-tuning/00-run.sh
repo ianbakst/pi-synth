@@ -19,9 +19,18 @@ set -e
 apt-get -y purge dphys-swapfile 2>/dev/null || true
 
 # Disable services that add scheduling jitter and aren't needed here.
-for svc in avahi-daemon triggerhappy ModemManager bluetooth hciuart cron; do
+for svc in triggerhappy ModemManager bluetooth hciuart cron; do
 	systemctl disable "${svc}.service" 2>/dev/null || true
 done
+
+# avahi-daemon (mDNS) is a deliberate exception, not disabled with the above:
+# it publishes <hostname>.local (TARGET_HOSTNAME in os-image/config) so the
+# board is reachable without hunting for its IP -- genuinely useful, and
+# unlike bluetooth/ModemManager it does no hardware polling and never touches
+# the isolated audio cores (1,2,3); it just runs on core 0 alongside SSH and
+# the rest of the non-RT stack. If this ever proves to add real jitter, revert
+# by moving it back into the loop above.
+systemctl enable avahi-daemon.service 2>/dev/null || true
 
 # Don't block boot waiting for the network to come "online": the audio stack
 # doesn't need the network, this alone costs ~7s of boot, and it can hang boot
