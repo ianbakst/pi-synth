@@ -40,6 +40,32 @@ else
 	echo "config.txt: no vc4-kms-v3d overlay — HDMI audio not present to disable"
 fi
 
+# --- cm5 only: DSI touchscreen (Waveshare Nano board) ---
+# Confirmed on hardware: on this SoC generation (BCM2712's RP1 DSI driver),
+# display_auto_detect alone hung/crashed the board with this panel connected
+# (required a re-flash to recover — see docs/engine-architecture.md history).
+# Disabling auto-detect and specifying the panel's overlay explicitly is what's
+# actually proven stable; it's also the common pattern on this generation even
+# for Raspberry Pi's own official panels. dtoverlay= is additive, not a
+# replacement — this coexists with vc4-kms-v3d (still required as the base KMS
+# driver) and hifiberry-dac (audio, unrelated). Not applied for pi4: its
+# touchscreen already works fine via plain display_auto_detect=1 (untouched
+# above), and forcing this cm5-specific panel overlay onto different hardware
+# would be wrong.
+if [ "${PI_SYNTH_BOARD:-pi4}" = "cm5" ]; then
+	if ! grep -qE "^dtoverlay=vc4-kms-dsi-7inch" "${CONFIG}"; then
+		cat >> "${CONFIG}" << 'EOF'
+
+# --- pi-synth: cm5 DSI touchscreen ---
+display_auto_detect=0
+dtoverlay=vc4-kms-dsi-7inch,dsi0
+EOF
+		echo "config.txt: added cm5 DSI touchscreen overlay, disabled auto-detect"
+	else
+		echo "config.txt: cm5 DSI touchscreen overlay already present"
+	fi
+fi
+
 # --- cmdline.txt: isolate cores 2,3 for JACK/engines + quiet boot ---
 # Single-line file; append our args once if not already there.
 # Isolate cores 1,2,3 for audio: core 1 = JACK, core 2 = instrument engine,
