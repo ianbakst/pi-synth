@@ -19,6 +19,24 @@ for unit in cpu-performance jack a2jmidid mod-host mod-host-fx \
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"
 done
 
+# --- cm5 only: force SDL's KMSDRM backend onto the DSI card (card0) ---
+# Confirmed on hardware: on this SoC (BCM2712/RP1), DSI and the main GPU/HDMI
+# are on SEPARATE DRM devices (drm-rp1-dsi vs vc4-drm) -- unlike pi4, which has
+# one unified device. Without this, SDL only ever opened a GPU render node
+# (renderD128) and never a primary card node for the DSI device, so frames
+# rendered fine but never reached the physical screen: panel backlit, correct
+# 800x480 mode negotiated (matches SCREEN_W/SCREEN_H in config.py), but nothing
+# visible. Not needed for pi4 -- its single unified DRM device needs no
+# disambiguation.
+if [ "${PI_SYNTH_BOARD:-pi4}" = "cm5" ]; then
+	mkdir -p "${ROOTFS_DIR}/etc/systemd/system/synth-ui.service.d"
+	cat > "${ROOTFS_DIR}/etc/systemd/system/synth-ui.service.d/kmsdrm.conf" << 'EOF2'
+[Service]
+Environment=SDL_KMSDRM_DEVICE_INDEX=0
+EOF2
+	echo "synth-ui: added cm5 SDL_KMSDRM_DEVICE_INDEX=0 drop-in"
+fi
+
 on_chroot << 'EOF'
 set -e
 # Stock fluidsynth.service (Debian's packaged service) grabs port 9800 and the
