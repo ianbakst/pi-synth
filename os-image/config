@@ -32,7 +32,7 @@ FIRST_USER_NAME='synth'
 FIRST_USER_PASS='synth'            # CHANGE THIS, or set a pubkey below. Appliance default.
 DISABLE_FIRST_BOOT_USER_RENAME=1
 
-TARGET_HOSTNAME='pi-synth'
+TARGET_HOSTNAME='synth'
 ENABLE_SSH=1                       # keep SSH (and WiFi) for development/iteration
 # PUBKEY_SSH_FIRST_USER="ssh-ed25519 AAAA... you@host"
 # PUBKEY_ONLY_SSH=1

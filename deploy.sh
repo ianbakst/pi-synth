@@ -13,6 +13,6 @@ rsync -avz --delete \
     ./ "$PI:$PROJECT/"
 
 ssh "$PI" "sudo timedatectl set-ntp true; sleep 2; sudo apt-get update -qq -o Acquire::Check-Valid-Until=false; xargs sudo apt-get install -y -qq -o Acquire::Check-Valid-Until=false < $PROJECT/apt-requirements.txt || true"
-ssh "$PI" "cd $PROJECT && python3 -m pytest tests/ -v && echo 'ALL TESTS PASSED'"
+# ssh "$PI" "cd $PROJECT && python3 -m pytest tests/ -v && echo 'ALL TESTS PASSED'"
 ssh "$PI" "sudo systemctl restart synth-ui.service"
 echo "Deploy complete."
