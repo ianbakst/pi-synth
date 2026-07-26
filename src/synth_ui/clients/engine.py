@@ -85,6 +85,11 @@ class EngineContext:
     mod_host: ModHostClient
     fluidsynth: FluidSynthController
     systemctl: Systemctl = _default_systemctl
+    # EngineManager wires this to "the effects rack is non-empty" once it owns
+    # one. Lets ModHostEngine.stop() leave mod-host.service running when
+    # switching to a non-mod-host instrument with effects loaded, instead of
+    # killing every loaded effect along with the instrument's own slot.
+    mod_host_needed: Callable[[], bool] = lambda: False
 
 
 class Engine(ABC):
@@ -251,7 +256,12 @@ class ModHostEngine(Engine):
     def stop(self, timeout: float = 2.0) -> None:
         self.ctx.mod_host.remove_plugin(self._instance)
         self._loaded_uri = None
-        _systemctl_unit(self.ctx, "stop", self.unit)
+        # Leave mod-host running if the effects rack still needs it (e.g.
+        # switching sfizz -> fluidsynth with effects loaded) -- otherwise
+        # stopping the process would kill every loaded effect too, not just
+        # this instrument's own instance-0 slot.
+        if not self.ctx.mod_host_needed():
+            _systemctl_unit(self.ctx, "stop", self.unit)
 
     def _load_plugin_with_retry(
         self, voice: Voice, timeout: float = _MOD_HOST_START_TIMEOUT

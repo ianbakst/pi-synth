@@ -33,12 +33,15 @@ class FakeJack:
         return list(self._q.get((client, type, is_output), []))
 
 
-def ctx_for(*, jack=None, mod_host=None, fluidsynth=None, systemctl=None):
+def ctx_for(
+    *, jack=None, mod_host=None, fluidsynth=None, systemctl=None, mod_host_needed=None
+):
     return EngineContext(
         jack=jack or FakeJack(),
         mod_host=mod_host or MagicMock(),
         fluidsynth=fluidsynth or MagicMock(),
         systemctl=systemctl or (lambda argv: 0),
+        mod_host_needed=mod_host_needed or (lambda: False),
     )
 
 
@@ -232,6 +235,26 @@ def test_modhost_stop_removes_plugin():
     mh.reset_mock()
     e.stop()
     mh.remove_plugin.assert_called_once_with(0)
+
+
+def test_modhost_stop_leaves_service_running_when_effects_rack_needs_it():
+    calls: list[list[str]] = []
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    ctx = ctx_for(
+        mod_host=mh,
+        systemctl=lambda argv: calls.append(argv) or 0,
+        mod_host_needed=lambda: True,
+    )
+    e = ModHostEngine(SFIZZ, ctx)
+    e.start()
+    mh.reset_mock()
+    calls.clear()
+    e.stop()
+    # instrument's own slot is always freed regardless of the rack...
+    mh.remove_plugin.assert_called_once_with(0)
+    # ...but the process itself stays up since effects still need it
+    assert ["sudo", "systemctl", "stop", "mod-host.service"] not in calls
 
 
 def test_modhost_load_fails_when_plugin_add_fails():
