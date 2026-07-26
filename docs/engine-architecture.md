@@ -219,12 +219,38 @@ Same-`key` load (e.g. fluidsynth SF2 → SF2) skips all patching: just
 
 ## Effects rack (mod-host) — `EffectsRack`
 
-A **second mod-host instance** (`systemd/mod-host-fx.service`, socket 5556) was
-planned for core 3 so instrument DSP and effect DSP never share a thread — **that
-plan now conflicts with core allocation reality**: the instrument mod-host uses
-cores 2+3 (see "CPU core allocation" above), so core 3 is no longer free/idle.
-Not resolved; revisit before wiring this in. `clients/effects_rack.py`
-(`EffectsRack`) manages the chain:
+**Resolved:** effects run in the *same* mod-host instance as the active
+instrument (cores 2+3), not a second process on its own core. The original
+two-instance plan (`systemd/mod-host-fx.service`, socket 5556, core 3) is
+superseded — reasoning, not just a resource conflict:
+
+- **Separate cores never bought parallelism here, because there wasn't any to
+  buy.** Instrument → effects is a serial *data dependency*: effects can't
+  start processing a period until the instrument's output for that period
+  exists. Total compute (instrument + effects) has to fit in one ~2.67ms
+  deadline no matter which core(s) either stage runs on — there is no
+  independent work to overlap. Contrast with why cores 2+3 *did* help the
+  instrument alone: mod-host's LV2 "worker" threads (e.g. sfizz's own sample-
+  streaming) are genuinely independent of that period's callback and benefit
+  from a free core to run on. Effects DSP has no such independent piece — it's
+  on the critical path by definition.
+- Practical upshot: a second mod-host on its own core would not have isolated
+  effects from instrument-side latency the way the original plan assumed. It
+  would have added a second full LV2-world-scan cold-start (the exact
+  readiness race already fixed once for the instrument mod-host) and a second
+  process that could wedge, for a benefit that doesn't materialize for this
+  specific pipeline shape.
+- **This also resolves one of the two hardware unknowns below**: mod-host's
+  per-instance port-naming convention (`effect_<instance>`) is no longer a
+  *separate* fx-mod-host question — it's the same convention already confirmed
+  on hardware for the instrument mod-host (`effect_0:control` /
+  `effect_0:out_left/right`, found while debugging sfizz). Effects loaded at
+  instances 10+ in the same process follow the identical naming; nothing new
+  to verify there. The *other* unknown (§ below) — whether a real effect
+  plugin's DSP fits the shared budget without pushing xruns up — is still a
+  hardware question, now the only one.
+
+`clients/effects_rack.py` (`EffectsRack`) manages the chain:
 
 - Effect plugins live at mod-host instances **`10+`** (instruments use `0–9`),
   loaded once and **persistent across instrument switches**.
@@ -234,26 +260,27 @@ Not resolved; revisit before wiring this in. `clients/effects_rack.py`
   likewise re-chain. Python only patches; DSP is in mod-host.
 - `input_ports()` (first effect) / `output_ports()` (last effect) let the manager
   route `active_instrument.out → rack.input`; the rack→DAC leg never moves.
-- **Watch the xrun counter** — each effect adds to core 3's RT budget.
+- **Watch the xrun counter as each effect is added** — this is now the real
+  budget check, since effects share the instrument's cores and its per-period
+  deadline. Add one at a time, measure, don't assume a chain that worked with
+  N-1 effects still has headroom for N.
 - **Not** running `mod-ui` (MOD's web pedalboard editor) — too heavy/jittery for a
   touchscreen appliance. Drive mod-host directly.
 
-**Two open questions that need the board** (why the routing/UI are deferred):
+**One open question left that needs the board:** does real effect DSP (a
+reverb, an EQ, a compressor) actually fit the shared per-period budget
+alongside a loaded instrument, and how many/how heavy before xruns climb? No
+longer an architecture question — just needs measuring on real hardware, the
+same way the instrument-alone budget was measured tonight (~180 → ~65
+xruns/min moving 2→cores 2,3; a similar live test applies here per effect
+added).
 
-1. **The fx mod-host's JACK client name.** Two mod-host processes both request the
-   name `mod-host`; the second is auto-suffixed (`mod-host-01`) or may fail if
-   mod-host forces the exact name. `mod-host-fx.service` ships **installed but not
-   enabled** until this is checked with `jack_lsp`.
-2. **How mod-host names a plugin instance's audio ports.** `EffectsRack._audio_ports`
-   assumes a per-instance client `effect_<instance>` — the single knob to confirm
-   and, if wrong, fix in one place. (Same class of unknown as
-   `ModHostEngine.jack_client` for the *instrument* mod-host.)
-
-**Deferred to hardware:** `EngineManager` routing (instrument → rack → DAC, and
-re-wiring the instrument when the rack goes empty↔non-empty) and the UI effects
-screen. The rack class + OS infra (effect LV2 packages, the fx service) are in
-place; the graph-patching that depends on the two answers above is not, on
-purpose.
+**Still deferred, now purely because nobody's built it yet, not because of an
+open unknown:** `EngineManager` routing (instrument → rack → DAC, and
+re-wiring the instrument when the rack goes empty↔non-empty) and the UI
+effects screen. `mod-host-fx.service` is dead code at this point — installed
+but never enabled and now superseded; worth deleting rather than leaving as
+confusing unused scaffolding.
 
 ## Startup: a working instrument on boot
 
