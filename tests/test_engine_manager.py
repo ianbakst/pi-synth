@@ -7,6 +7,7 @@ swap in a FakeJack and a fake registry, so no JACK/mod-host/fluidsynth is needed
 from unittest.mock import MagicMock
 
 from synth_ui.clients.audio_devices import AudioDevices
+from synth_ui.clients.effects_rack import EffectsRack
 from synth_ui.clients.engine_manager import EngineManager
 from synth_ui.clients.voice import Voice
 
@@ -26,9 +27,10 @@ KBD = "a2j:KBD (capture): MIDI 1"
 
 
 class FakeJack:
-    def __init__(self, ready=True):
+    def __init__(self, ready=True, ports=None):
         self.ready = ready
         self.connects: list = []
+        self._ports = ports or {}
 
     def wait_for(self, *, client, type=None, is_output=None, timeout=0):
         return self.ready
@@ -39,9 +41,20 @@ class FakeJack:
     def dac_sinks(self, snapshot=None):
         return ["system:playback_1", "system:playback_2"]
 
+    def ports(
+        self, *, client=None, type=None, is_output=None, contains=None, snapshot=None
+    ):
+        return list(self._ports.get((client, type, is_output), []))
+
     def connect(self, src, dst):
         EVENTS.append(("connect", src, dst))
         self.connects.append((src, dst))
+        return True
+
+    def disconnect(self, src, dst):
+        EVENTS.append(("disconnect", src, dst))
+        if (src, dst) in self.connects:
+            self.connects.remove((src, dst))
         return True
 
 
@@ -109,7 +122,12 @@ def make_mgr(jack=None):
     EVENTS.clear()
     m = EngineManager()
     m._jack = jack or FakeJack()
+    m._mod_host = MagicMock()
     m._registry = {"fluidsynth": FluidFake, "sfizz": ModFake, "dexed": ModFake}
+    # __init__ already built self._effects against the pre-swap real jack/mod_host;
+    # rebuild it against the fakes above so effects tests never touch real JACK.
+    m._effects = EffectsRack(m._jack, m._mod_host)
+    m._ctx.mod_host_needed = lambda: not m._effects.is_empty()
     return m
 
 
@@ -240,3 +258,67 @@ def test_set_audio_device_fails_when_jack_restart_fails(tmp_path):
     m._audio_device_file = str(tmp_path / "dev")
     m._ctx.systemctl = lambda argv: 1          # restart fails
     assert m.set_audio_device("Headphones") is False
+
+
+# --- effects rack ------------------------------------------------------------
+
+EFFECT_10_PORTS = {
+    ("effect_10", "audio", False): ["effect_10:in_left", "effect_10:in_right"],
+    ("effect_10", "audio", True): ["effect_10:out_left", "effect_10:out_right"],
+}
+EFFECT_10_AND_11_PORTS = {
+    **EFFECT_10_PORTS,
+    ("effect_11", "audio", False): ["effect_11:in_left", "effect_11:in_right"],
+    ("effect_11", "audio", True): ["effect_11:out_left", "effect_11:out_right"],
+}
+
+
+def test_effects_available_only_while_modhost_engine_active():
+    m = make_mgr()
+    assert m.effects_available() is False
+    m.load_voice(GM)
+    assert m.effects_available() is False
+    m.load_voice(SFIZZ)
+    assert m.effects_available() is True
+
+
+def test_wire_routes_engine_audio_to_rack_when_nonempty():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    m = make_mgr(jack)
+    assert m.add_effect("urn:reverb") == 10
+    assert m.load_voice(SFIZZ) is True
+    assert ("mod-host:o1", "effect_10:in_left") in jack.connects
+    assert ("mod-host:o2", "effect_10:in_right") in jack.connects
+    assert ("mod-host:o1", "system:playback_1") not in jack.connects
+
+
+def test_add_effect_rewires_instrument_into_new_first_effect():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    m = make_mgr(jack)
+    assert m.load_voice(SFIZZ) is True
+    # straight to DAC while the rack is empty
+    assert ("mod-host:o1", "system:playback_1") in jack.connects
+    assert m.add_effect("urn:reverb") == 10
+    # re-wired after the mutation
+    assert ("mod-host:o1", "effect_10:in_left") in jack.connects
+
+
+def test_remove_first_effect_rewires_instrument_to_new_first():
+    jack = FakeJack(ports=EFFECT_10_AND_11_PORTS)
+    m = make_mgr(jack)
+    assert m.load_voice(SFIZZ) is True
+    assert m.add_effect("urn:a") == 10
+    assert m.add_effect("urn:b") == 11
+    assert ("mod-host:o1", "effect_10:in_left") in jack.connects
+    m.remove_effect(10)
+    assert ("mod-host:o1", "effect_11:in_left") in jack.connects
+
+
+def test_mod_host_needed_reflects_effects_rack_state():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    m = make_mgr(jack)
+    assert m._ctx.mod_host_needed() is False
+    assert m.add_effect("urn:reverb") == 10
+    assert m._ctx.mod_host_needed() is True
+    m.remove_effect(10)
+    assert m._ctx.mod_host_needed() is False

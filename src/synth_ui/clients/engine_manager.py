@@ -25,6 +25,7 @@ from synth_ui.clients.constants import (
     LOCALHOST,
     SILENCE_TIMEOUT,
 )
+from synth_ui.clients.effects_rack import Effect, EffectsRack
 from synth_ui.clients.engine import ENGINE_REGISTRY, Engine, EngineContext
 from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.mod_host_client import ModHostClient
@@ -64,6 +65,12 @@ class EngineManager:
         self._ctx = EngineContext(
             jack=self._jack, mod_host=self._mod_host, fluidsynth=self._fluidsynth
         )
+        # Effects share the instrument mod-host's own client/process (never a
+        # second one — see effects_rack.py and docs/engine-architecture.md
+        # "Effects rack"). mod_host_needed keeps ModHostEngine.stop() from
+        # killing the rack when switching to a non-mod-host instrument.
+        self._effects = EffectsRack(self._jack, self._mod_host)
+        self._ctx.mod_host_needed = lambda: not self._effects.is_empty()
         self._audio = AudioDevices()
         self._audio_device_file = audio_device_file
         self._registry = ENGINE_REGISTRY  # overridable in tests
@@ -199,7 +206,11 @@ class EngineManager:
         return True
 
     def _wire(self, engine: Engine) -> None:
-        """Patch keyboard MIDI -> engine, and engine audio -> DAC. Idempotent."""
+        """Patch keyboard MIDI -> engine, and engine audio -> DAC (or, if the
+        effects rack is non-empty, -> the rack's input instead; the rack's own
+        output -> DAC leg is owned by EffectsRack._rechain, not here).
+        Idempotent — also the hook that re-establishes this leg after a rack
+        mutation changes which effect is first in the chain."""
         midi_in = engine.midi_port
         if midi_in:
             for src in self._jack.keyboard_midi_sources():
@@ -208,7 +219,10 @@ class EngineManager:
             logger.warning("no MIDI input port found for engine '%s'", engine.key)
 
         outs = engine.audio_out_ports
-        sinks = self._jack.dac_sinks()
+        if self._effects.is_empty():
+            sinks = self._jack.dac_sinks()
+        else:
+            sinks = self._effects.input_ports()
         if outs and sinks:
             for src, dst in zip(outs, sinks):
                 self._jack.connect(src, dst)
@@ -217,3 +231,40 @@ class EngineManager:
 
     def _is_active(self, key: str) -> bool:
         return self._active is not None and self._active.key == key
+
+    # ------------------------------------------------------------------
+    # Effects rack
+    # ------------------------------------------------------------------
+    # v1 scope: effects are only available while a mod-host-hosted instrument
+    # (sfizz/dexed) is active — see effects_available(). mod-host is already
+    # running and warm whenever that's true, so no start/stop lifecycle is
+    # needed here. Running mod-host concurrently with fluidsynth/setBfree on
+    # core 2 is untested and, per prior hardware validation of that same core
+    # with two RT clients on it, plausibly reintroduces the xrun problem
+    # mod-host's on-demand lifecycle exists to avoid — see
+    # docs/engine-architecture.md "Effects rack".
+
+    def effects_available(self) -> bool:
+        return self._is_active("modhost")
+
+    def effects(self) -> list[Effect]:
+        return self._effects.effects()
+
+    def add_effect(self, uri: str) -> int | None:
+        instance = self._effects.add(uri)
+        if instance is not None and self._active is not None:
+            self._wire(self._active)
+        return instance
+
+    def remove_effect(self, instance: int) -> None:
+        self._effects.remove(instance)
+        if self._active is not None:
+            self._wire(self._active)
+
+    def clear_effects(self) -> None:
+        self._effects.clear()
+        if self._active is not None:
+            self._wire(self._active)
+
+    def set_effect_param(self, instance: int, symbol: str, value: str) -> bool:
+        return self._effects.set_param(instance, symbol, value)
