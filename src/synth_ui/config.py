@@ -12,6 +12,7 @@ IS_PI = os.path.exists("/sys/firmware/devicetree/base/model")
 SOUNDFONT_DIR = os.path.expanduser("~/soundfonts")
 INSTRUMENTS_DIR = os.path.expanduser("~/instruments")
 VOICES_MANIFEST = os.path.join(INSTRUMENTS_DIR, "voices.json")
+EFFECTS_MANIFEST = os.path.join(INSTRUMENTS_DIR, "effects.json")
 STATE_FILE = os.path.expanduser("~/.synth-state")
 
 # Selected ALSA card id (e.g. "sndrpihifiberry"). The UI writes it; scripts/
