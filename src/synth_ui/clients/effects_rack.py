@@ -1,20 +1,28 @@
 """
-EffectsRack: an ordered chain of LV2 effects hosted in the effects mod-host.
+EffectsRack: an ordered chain of LV2 effects hosted in the SAME mod-host
+instance (port 5555) that hosts the active mod-host instrument, if any.
 
-A dedicated mod-host instance (port 5556, core 3 — see systemd/mod-host-fx.service)
-hosts only effects, so instrument DSP (core 2) and effect DSP (core 3) don't
-share a thread. The rack is persistent across instrument switches; Python only
-patches the JACK graph (add/remove/param + wiring), never touching audio itself.
+A prior design ran effects in a second mod-host instance on its own core
+(port 5556, systemd/mod-host-fx.service, now deleted). That's dead: instrument
+-> effects is a serial data dependency (effects can't process a period until
+the instrument's output for that period exists), so a second core never bought
+parallelism between those two stages — see docs/engine-architecture.md
+"Effects rack" for the full reasoning. EngineManager constructs this rack with
+its existing ModHostClient (self._mod_host); never a second one.
+
+The rack is persistent across instrument switches; Python only patches the
+JACK graph (add/remove/param + wiring), never touching audio itself.
 
 Signal flow it owns:  fx[0].out -> fx[1].in -> ... -> fx[N].out -> system:playback
 The instrument's audio -> fx[0].in leg is owned by EngineManager (it moves on an
 instrument switch); the rack's output -> DAC leg never moves.
 
-Effects live at mod-host instances 10+ (instruments use 0-9).
+Effects live at mod-host instances 10+ (instrument engines use instance 0).
 
-PORT DISCOVERY IS A HARDWARE KNOB: this assumes mod-host exposes each plugin
-instance under a per-instance JACK client named "effect_<instance>". Confirm with
-`jack_lsp` on the Pi and adjust _audio_ports if mod-host names them differently.
+Port naming: mod-host exposes each plugin instance under a per-instance JACK
+client named "effect_<instance>" (both audio and control ports) — confirmed on
+hardware, the same convention already proven for the instrument mod-host
+(ModHostEngine.audio_client), not a separate unknown.
 """
 
 import logging

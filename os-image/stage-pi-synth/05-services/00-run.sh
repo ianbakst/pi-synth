@@ -11,9 +11,9 @@
 #   continuous JACK XRuns even fully idle — two RT clients contending for one
 #   isolated core. EngineManager now starts/stops it exactly like the other
 #   instrument engines (see ModHostEngine in src/synth_ui/clients/engine.py).
-# Installed but NOT enabled (Phase 3, pending hardware confirmation of its JACK
-# client name):  mod-host-fx
-for unit in cpu-performance jack a2jmidid mod-host mod-host-fx \
+#   Effects (EffectsRack) share this same instance rather than a second
+#   mod-host process — see docs/engine-architecture.md "Effects rack".
+for unit in cpu-performance jack a2jmidid mod-host \
             fluidsynth-engine setbfree synth-ui; do
 	install -m 644 "${PI_SYNTH_SRC}/systemd/${unit}.service" \
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"

@@ -278,9 +278,9 @@ added).
 **Still deferred, now purely because nobody's built it yet, not because of an
 open unknown:** `EngineManager` routing (instrument → rack → DAC, and
 re-wiring the instrument when the rack goes empty↔non-empty) and the UI
-effects screen. `mod-host-fx.service` is dead code at this point — installed
-but never enabled and now superseded; worth deleting rather than leaving as
-confusing unused scaffolding.
+effects screen — in progress, see the plan for "Wire the effects rack into
+EngineManager + UI". `mod-host-fx.service` (the old, superseded two-instance
+design) has been deleted.
 
 ## Startup: a working instrument on boot
 
