@@ -4,11 +4,13 @@ import threading
 import pygame
 
 from synth_ui.clients import EngineManager, Preset
+from synth_ui.clients.effects_catalog import EffectCatalogEntry, read_effects_manifest
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
     DEFAULT_GAIN,
     DEFAULT_VOICE,
+    EFFECTS_MANIFEST,
     FLUIDSYNTH_HOST,
     FLUIDSYNTH_PORT,
     IS_PI,
@@ -21,6 +23,7 @@ from synth_ui.config import (
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.audio import AudioScreen
 from synth_ui.ui.screens.base import Screen
+from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
 from synth_ui.ui.screens.home import HomeScreen
 from synth_ui.ui.screens.preset import PresetScreen
 from synth_ui.ui.screens.splash import SplashScreen
@@ -76,6 +79,11 @@ class SynthUI:
         self._gain: float = DEFAULT_GAIN
         self._preset_screen: PresetScreen | None = None
         self._audio_screen: AudioScreen | None = None
+        self._effects_screen: EffectsScreen | None = None
+        self._catalog_screen: EffectsCatalogScreen | None = None
+        self._catalog: list[EffectCatalogEntry] = read_effects_manifest(
+            EFFECTS_MANIFEST
+        )
 
         self._home = HomeScreen(
             on_load_voice=self._engine.load_voice,
@@ -85,6 +93,7 @@ class SynthUI:
             on_save=_save_state,
             on_usb=self._show_usb_screen,
             on_audio=self._show_audio_screen,
+            on_effects=self._show_effects_screen,
             # Fall back to a default so a freshly flashed card (no ~/.synth-state)
             # boots straight into a playable instrument.
             initial_name=_load_state() or DEFAULT_VOICE,
@@ -164,6 +173,59 @@ class SynthUI:
             self._audio_screen.set_loading(False)
             self._audio_screen.header.error = True
             self._audio_screen.header.name = "Audio switch failed"
+
+    def _show_effects_screen(self) -> None:
+        # v1 scope: mod-host isn't guaranteed running/warm otherwise — see
+        # EngineManager.effects_available() and docs/engine-architecture.md.
+        if not self._engine.effects_available():
+            self._home.header.error = True
+            self._home.header.name = "Effects need a sfizz/dexed voice active"
+            return
+        self._effects_screen = EffectsScreen(
+            effects=self._engine.effects(),
+            catalog=self._catalog,
+            on_remove=self._on_remove_effect,
+            on_add=self._show_effects_catalog_screen,
+            on_back=self._show_home,
+        )
+        self.screen = self._effects_screen
+
+    def _show_effects_catalog_screen(self) -> None:
+        self._catalog_screen = EffectsCatalogScreen(
+            catalog=self._catalog,
+            on_select=self._on_add_effect,
+            on_back=self._show_effects_screen,
+        )
+        self.screen = self._catalog_screen
+
+    def _on_remove_effect(self, instance: int) -> None:
+        if self._effects_screen is None:
+            return
+        self._effects_screen.set_loading(True)
+        threading.Thread(
+            target=self._remove_effect_worker, args=(instance,), daemon=True
+        ).start()
+
+    def _remove_effect_worker(self, instance: int) -> None:
+        self._engine.remove_effect(instance)
+        self._show_effects_screen()
+
+    def _on_add_effect(self, entry: EffectCatalogEntry) -> None:
+        if self._catalog_screen is None:
+            return
+        self._catalog_screen.set_loading(True)
+        threading.Thread(
+            target=self._add_effect_worker, args=(entry,), daemon=True
+        ).start()
+
+    def _add_effect_worker(self, entry: EffectCatalogEntry) -> None:
+        instance = self._engine.add_effect(entry.uri)
+        if instance is not None:
+            self._show_effects_screen()
+        elif self._catalog_screen is not None:
+            self._catalog_screen.set_loading(False)
+            self._catalog_screen.header.error = True
+            self._catalog_screen.header.name = "Failed to add effect"
 
     def _to_ui_event(self, event: pygame.event.Event) -> UIEvent | None:
         match event.type:

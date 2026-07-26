@@ -32,6 +32,7 @@ class HomeScreen(Screen):
         on_save: Callable[[str], None],
         on_usb: Callable,
         on_audio: Callable,
+        on_effects: Callable,
         initial_name: str | None = None,
         initial_gain: float = DEFAULT_GAIN,
     ):
@@ -52,6 +53,8 @@ class HomeScreen(Screen):
             on_action=on_usb,
             action2_label="Audio",
             on_action2=on_audio,
+            action3_label="Effects",
+            on_action3=on_effects,
         )
         voices = load_voices(VOICES_MANIFEST, SOUNDFONT_DIR)
         self.voice_list = VoiceList(

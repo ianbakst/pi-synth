@@ -29,6 +29,8 @@ class Header(Component):
         on_action: Callable | None = None,
         action2_label: str | None = None,
         on_action2: Callable | None = None,
+        action3_label: str | None = None,
+        on_action3: Callable | None = None,
     ):
         super().__init__(rect)
         self.font = font
@@ -41,6 +43,8 @@ class Header(Component):
             self.actions.append((action_label, on_action))
         if action2_label and on_action2:
             self.actions.append((action2_label, on_action2))
+        if action3_label and on_action3:
+            self.actions.append((action3_label, on_action3))
 
     @Component.loading.setter
     def loading(self, value: bool) -> None:
