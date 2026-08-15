@@ -6,8 +6,10 @@ After=sound.target
 Type=simple
 User=synth
 Environment=JACK_NO_AUDIO_RESERVATION=1
-ExecStart=/usr/bin/chrt -f 90 /usr/bin/taskset -c 2,3 \
-    /usr/bin/jackd -d alsa -d hw:sndrpihifiberry -r 48000 -p 128 -n 2
+# The wrapper picks the ALSA card (saved -> HiFiBerry -> first -> dummy backend)
+# and execs jackd with chrt -f 90 / taskset -c 1, so core 1 (the audio heartbeat)
+# runs alone. Device is selectable at runtime; see scripts/start-jack.sh.
+ExecStart=/home/synth/synth/scripts/start-jack.sh
 LimitRTPRIO=90
 LimitMEMLOCK=infinity
 Restart=always

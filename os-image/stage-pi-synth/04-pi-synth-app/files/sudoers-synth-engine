@@ -1,0 +1,6 @@
+# Let the UI (running as 'synth') manage the audio services without a password.
+# Scoped tightly: start/stop the on-demand engines (fluidsynth, setbfree,
+# mod-host — all three are started/stopped by EngineManager on voice switch,
+# see ModHostEngine in src/synth_ui/clients/engine.py), and restart jack when
+# the user switches the audio card. a2jmidid cycles automatically (PartOf).
+synth ALL=(root) NOPASSWD: /usr/bin/systemctl start fluidsynth-engine.service, /usr/bin/systemctl stop fluidsynth-engine.service, /usr/bin/systemctl start setbfree.service, /usr/bin/systemctl stop setbfree.service, /usr/bin/systemctl start mod-host.service, /usr/bin/systemctl stop mod-host.service, /usr/bin/systemctl restart jack.service

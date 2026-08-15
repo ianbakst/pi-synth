@@ -1,8 +1,8 @@
 [
   {
-    "name": "Salamander Grand",
+    "name": "LivingRoom Upright",
     "engine": "sfizz",
-    "path": "/home/synth/instruments/piano/salamander/SalamanderGrandPianoV3.sfz",
+    "path": "/home/synth/instruments/piano/livingroom/livingroom-upright.sfz",
     "category": "Piano"
   },
   {

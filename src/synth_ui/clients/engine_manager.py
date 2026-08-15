@@ -1,47 +1,58 @@
 """
-EngineManager: dispatches voice loading to the correct audio engine.
+EngineManager: the single audio-control surface the UI talks to.
 
-FluidSynth  → TCP shell on port 9800 (existing)
-sfizz       → mod-host LV2 socket on port 5555
-Dexed       → mod-host LV2 socket on port 5555
-setBfree    → standalone JACK client (started by engine-manager.sh)
-Pianoteq    → standalone JACK client (started by engine-manager.sh)
+Owns exactly one active Engine (see engine.py) and composes JackGraph + the
+engine registry to switch instruments with:
+  - connect-before-disconnect (MIDI *and* audio) — no silent gap on a switch,
+  - panic-before-teardown — no stuck notes,
+  - same-source in-place reload (fluidsynth SF2 -> SF2, or sfizz <-> dexed inside
+    mod-host) with no process restart.
 
-Engine switching (different engine type) is delegated to engine-manager.sh,
-which stops the old process, starts the new one, and reconnects MIDI.
-The Python layer never starts or kills audio processes directly.
+Crucially, the audio wiring (engine outputs -> system:playback) happens here —
+that is what makes mod-host-hosted instruments (sfizz/dexed) audible, which the
+old shell-script path never did. This replaces engine-manager.sh / midi-connect.sh
+entirely; the UI's public API is unchanged (load_voice / list_presets /
+select_preset / set_gain / is_connected).
 """
 
 import logging
-import subprocess
 
-from synth_ui.clients.constants import DEFAULT_PORT, FIRST_TIMEOUT, LOAD_TIMEOUT, LOCALHOST, SILENCE_TIMEOUT
+from synth_ui.clients.audio_devices import AudioDevices, Card
+from synth_ui.clients.constants import (
+    DEFAULT_PORT,
+    FIRST_TIMEOUT,
+    LOAD_TIMEOUT,
+    LOCALHOST,
+    SILENCE_TIMEOUT,
+)
+from synth_ui.clients.effects_rack import Effect, EffectsRack
+from synth_ui.clients.engine import ENGINE_REGISTRY, Engine, EngineContext
+from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.synth_client import FluidSynthController, Preset
 from synth_ui.clients.voice import Voice
+from synth_ui.config import AUDIO_DEVICE_FILE
 
 logger = logging.getLogger(__name__)
 
-# LV2 plugin URIs — verify with `lv2ls` on the Pi after installation
-_SFIZZ_URI = "http://sfztools.github.io/sfizz"
-_DEXED_URI = "https://asb2m10.github.io/dexed"
-
-# mod-host instance number used for the instrument plugin
-_INSTRUMENT_INSTANCE = 0
+_MOD_HOST_PORT = 5555
+# How long to wait for a newly-started engine to register its JACK ports.
+_READY_TIMEOUT = 6.0
+# How long to wait for jack + mod-host to come back after a card-change restart.
+_AUDIO_STACK_TIMEOUT = 10.0
 
 
 class EngineManager:
-    """High-level voice switcher that abstracts over all supported engines."""
+    """High-level voice switcher over all engines. One active engine at a time."""
 
     def __init__(
         self,
-        engine_manager_script: str,
         fluidsynth_host: str = LOCALHOST,
         fluidsynth_port: int = DEFAULT_PORT,
         mod_host_host: str = LOCALHOST,
-        mod_host_port: int = 5555,
+        mod_host_port: int = _MOD_HOST_PORT,
+        audio_device_file: str = AUDIO_DEVICE_FILE,
     ):
-        self._script = engine_manager_script
         self._fluidsynth = FluidSynthController(
             host=fluidsynth_host,
             port=fluidsynth_port,
@@ -50,95 +61,210 @@ class EngineManager:
             load_timeout=LOAD_TIMEOUT,
         )
         self._mod_host = ModHostClient(host=mod_host_host, port=mod_host_port)
-        self._current_engine: str | None = None
+        self._jack = JackGraph()
+        self._ctx = EngineContext(
+            jack=self._jack, mod_host=self._mod_host, fluidsynth=self._fluidsynth
+        )
+        # Effects share the instrument mod-host's own client/process (never a
+        # second one — see effects_rack.py and docs/engine-architecture.md
+        # "Effects rack"). mod_host_needed keeps ModHostEngine.stop() from
+        # killing the rack when switching to a non-mod-host instrument.
+        self._effects = EffectsRack(self._jack, self._mod_host)
+        self._ctx.mod_host_needed = lambda: not self._effects.is_empty()
+        self._audio = AudioDevices()
+        self._audio_device_file = audio_device_file
+        self._registry = ENGINE_REGISTRY  # overridable in tests
+        self._active: Engine | None = None
 
     # ------------------------------------------------------------------
-    # Public API (mirrors FluidSynthController where possible)
+    # Public API (UI contract — unchanged)
     # ------------------------------------------------------------------
 
     def load_voice(self, voice: Voice) -> bool:
-        """Switch to the given voice, starting a new engine if necessary."""
-        if voice.engine != self._current_engine:
-            ok = self._switch_engine(voice)
-            if not ok:
-                return False
-        else:
-            ok = self._load_on_current(voice)
-        return ok
+        engine_cls = self._registry.get(voice.engine)
+        if engine_cls is None:
+            logger.error("unknown engine: %s", voice.engine)
+            return False
+
+        # Same JACK source already active -> reload in place (no restart, no gap).
+        if self._active is not None and self._active.key == engine_cls.key:
+            ok = self._active.load(voice)
+            self._active.voice = voice
+            # Re-patch (idempotent): covers mod-host recreating a plugin's audio
+            # ports on a sfizz<->dexed swap; a no-op for fluidsynth's stable ports.
+            self._wire(self._active)
+            return ok
+
+        return self._switch_to(engine_cls, voice)
 
     def list_presets(self) -> list[Preset]:
-        """Return presets for the active voice. Non-empty only for FluidSynth."""
-        if self._current_engine == "fluidsynth":
+        if self._is_active("fluidsynth"):
             return self._fluidsynth.list_presets()
         return []
 
     def select_preset(self, channel: int, sfont_id: int, bank: int, prog: int) -> None:
-        if self._current_engine == "fluidsynth":
+        if self._is_active("fluidsynth"):
             self._fluidsynth.select_preset(channel, sfont_id, bank, prog)
 
     def set_gain(self, gain: float) -> None:
-        if self._current_engine == "fluidsynth":
+        # Only FluidSynth exposes gain today; other engines: TODO (JACK volume or
+        # a plugin parameter).
+        if self._is_active("fluidsynth"):
             self._fluidsynth.set_gain(gain)
-        # TODO: gain for other engines via JACK volume or plugin params
 
     def is_connected(self) -> bool:
-        if self._current_engine == "fluidsynth":
-            return self._fluidsynth.is_connected()
-        if self._current_engine in ("sfizz", "dexed"):
-            return self._mod_host.is_connected()
-        if self._current_engine in ("setbfree", "pianoteq"):
-            return True  # no socket to query; assume running if switch succeeded
-        return False
+        return self._active is not None and self._active.is_ready()
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Audio device (which ALSA card JACK opens)
     # ------------------------------------------------------------------
 
-    def _switch_engine(self, voice: Voice) -> bool:
-        """Call engine-manager.sh to stop old engine and start new one."""
-        args = [self._script, voice.engine]
-        if voice.path:
-            args.append(voice.path)
-        try:
-            result = subprocess.run(args, timeout=15)
-            if result.returncode != 0:
-                logger.error("engine-manager.sh exited %d", result.returncode)
-                return False
-        except FileNotFoundError:
-            logger.warning("engine-manager.sh not found at %s — skipping engine switch", self._script)
-        except subprocess.TimeoutExpired:
-            logger.error("engine-manager.sh timed out")
+    def list_audio_cards(self) -> list[Card]:
+        return self._audio.list_cards()
+
+    def current_audio_device(self) -> str | None:
+        """The card id currently in effect (saved choice resolved by precedence)."""
+        return self._audio.resolve(self._read_audio_device())
+
+    def set_audio_device(self, card_id: str) -> bool:
+        """Persist the card, restart the JACK stack onto it, and re-establish the
+        active voice. JACK binds its device at startup, so this restarts jackd
+        (mod-host/a2jmidid cycle via PartOf); the previous voice is rebuilt on the
+        new server."""
+        voice = self._active.voice if self._active is not None else None
+        if self._active is not None:
+            self._active.panic()
+            self._active.stop()
+            self._active = None
+
+        self._write_audio_device(card_id)
+        if self._ctx.systemctl(["sudo", "systemctl", "restart", "jack.service"]) != 0:
+            logger.error("jack restart failed while switching audio device")
+            return False
+        if not self._wait_audio_stack():
             return False
 
-        self._current_engine = voice.engine
-
-        # For mod-host engines, load the plugin now
-        if voice.engine in ("sfizz", "dexed"):
-            return self._load_mod_host_plugin(voice)
-
+        if voice is not None:
+            return self.load_voice(voice)
         return True
 
-    def _load_on_current(self, voice: Voice) -> bool:
-        """Load a new voice on the already-running engine (no engine restart)."""
-        match voice.engine:
-            case "fluidsynth":
-                return self._fluidsynth.load_soundfont(voice.path)
-            case "sfizz" | "dexed":
-                return self._reload_mod_host_file(voice)
-            case "setbfree" | "pianoteq":
-                return True  # no reload for these; they're single-voice engines
-        return False
-
-    def _load_mod_host_plugin(self, voice: Voice) -> bool:
-        uri = _SFIZZ_URI if voice.engine == "sfizz" else _DEXED_URI
-        self._mod_host.remove_plugin(_INSTRUMENT_INSTANCE)
-        if not self._mod_host.load_plugin(uri, _INSTRUMENT_INSTANCE):
-            logger.error("Failed to load %s plugin", voice.engine)
+    def _wait_audio_stack(self, timeout: float = _AUDIO_STACK_TIMEOUT) -> bool:
+        """Block until jack is back after a restart. mod-host is on-demand now
+        (started by ModHostEngine.start() itself, which waits for it) — nothing
+        to wait for here if it isn't the active engine."""
+        if not self._jack.wait_for(
+            client="system", type="audio", is_output=False, timeout=timeout
+        ):
+            logger.error("jack did not return after restart")
             return False
-        return self._reload_mod_host_file(voice)
+        return True
 
-    def _reload_mod_host_file(self, voice: Voice) -> bool:
-        if not voice.path:
-            return True
-        symbol = "sfz_file" if voice.engine == "sfizz" else "sysex_file"
-        return self._mod_host.set_param(_INSTRUMENT_INSTANCE, symbol, f"'{voice.path}'")
+    def _read_audio_device(self) -> str | None:
+        try:
+            with open(self._audio_device_file) as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
+    def _write_audio_device(self, card_id: str) -> None:
+        try:
+            with open(self._audio_device_file, "w") as f:
+                f.write(card_id)
+        except OSError as e:
+            logger.error("could not persist audio device selection: %s", e)
+
+    # ------------------------------------------------------------------
+    # Switching
+    # ------------------------------------------------------------------
+
+    def _switch_to(self, engine_cls: type[Engine], voice: Voice) -> bool:
+        new = engine_cls(voice, self._ctx)
+        new.start()
+        if not self._jack.wait_for(
+            client=new.audio_client,
+            type="audio",
+            is_output=True,
+            timeout=_READY_TIMEOUT,
+        ):
+            logger.error("engine %s did not register JACK ports in time", voice.engine)
+            new.stop()
+            return False
+        new.load(voice)
+
+        # Connect the new engine fully BEFORE tearing the old one down, so there
+        # is no silent gap (brief overlap is fine and inaudible-ish).
+        self._wire(new)
+
+        old = self._active
+        if old is not None:
+            old.panic()
+            # Stopping old removes its JACK ports; jackd drops their connections
+            # automatically, so no explicit disconnect is needed.
+            old.stop()
+
+        self._active = new
+        return True
+
+    def _wire(self, engine: Engine) -> None:
+        """Patch keyboard MIDI -> engine, and engine audio -> DAC (or, if the
+        effects rack is non-empty, -> the rack's input instead; the rack's own
+        output -> DAC leg is owned by EffectsRack._rechain, not here).
+        Idempotent — also the hook that re-establishes this leg after a rack
+        mutation changes which effect is first in the chain."""
+        midi_in = engine.midi_port
+        if midi_in:
+            for src in self._jack.keyboard_midi_sources():
+                self._jack.connect(src, midi_in)
+        else:
+            logger.warning("no MIDI input port found for engine '%s'", engine.key)
+
+        outs = engine.audio_out_ports
+        if self._effects.is_empty():
+            sinks = self._jack.dac_sinks()
+        else:
+            sinks = self._effects.input_ports()
+        if outs and sinks:
+            for src, dst in zip(outs, sinks):
+                self._jack.connect(src, dst)
+        else:
+            logger.warning("no audio-out/DAC ports to wire for engine '%s'", engine.key)
+
+    def _is_active(self, key: str) -> bool:
+        return self._active is not None and self._active.key == key
+
+    # ------------------------------------------------------------------
+    # Effects rack
+    # ------------------------------------------------------------------
+    # v1 scope: effects are only available while a mod-host-hosted instrument
+    # (sfizz/dexed) is active — see effects_available(). mod-host is already
+    # running and warm whenever that's true, so no start/stop lifecycle is
+    # needed here. Running mod-host concurrently with fluidsynth/setBfree on
+    # core 2 is untested and, per prior hardware validation of that same core
+    # with two RT clients on it, plausibly reintroduces the xrun problem
+    # mod-host's on-demand lifecycle exists to avoid — see
+    # docs/engine-architecture.md "Effects rack".
+
+    def effects_available(self) -> bool:
+        return self._is_active("modhost")
+
+    def effects(self) -> list[Effect]:
+        return self._effects.effects()
+
+    def add_effect(self, uri: str) -> int | None:
+        instance = self._effects.add(uri)
+        if instance is not None and self._active is not None:
+            self._wire(self._active)
+        return instance
+
+    def remove_effect(self, instance: int) -> None:
+        self._effects.remove(instance)
+        if self._active is not None:
+            self._wire(self._active)
+
+    def clear_effects(self) -> None:
+        self._effects.clear()
+        if self._active is not None:
+            self._wire(self._active)
+
+    def set_effect_param(self, instance: int, symbol: str, value: str) -> bool:
+        return self._effects.set_param(instance, symbol, value)

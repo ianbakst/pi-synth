@@ -81,8 +81,14 @@ class ModHostClient:
         return self._ok(f"remove {instance}")
 
     def set_param(self, instance: int, symbol: str, value: str) -> bool:
-        """Set a plugin parameter by LV2 symbol."""
+        """Set a plugin parameter by LV2 symbol (a lv2:ControlPort)."""
         return self._ok(f"param_set {instance} {symbol} {value}")
+
+    def patch_set(self, instance: int, property_uri: str, value: str) -> bool:
+        """Set an LV2 patch property (atom-based), e.g. a plugin's instrument-file
+        path. Distinct from set_param: file-loading params like sfizz's SFZ file
+        are patch:writable properties, which param_set can't reach."""
+        return self._ok(f"patch_set {instance} {property_uri} {value}")
 
     def connect_ports(self, from_port: str, to_port: str) -> bool:
         """Connect two JACK ports."""

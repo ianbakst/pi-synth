@@ -1,5 +1,25 @@
 # MIDI Instrument — Project Specification & Rebuild Instructions
 
+> ## ⚠️ CURRENT STATE (2026-07 — read this first)
+>
+> **Provisioning is now a custom pi-gen OS image, not `setup.sh`.** `setup.sh`
+> has been removed. To build a unit, flash the image built under
+> [`os-image/`](os-image/README.md) (drop your RT kernel `.deb` in
+> `os-image/kernel/`, then `cd os-image && ./build.sh`). `deploy.sh` is still the
+> fast inner loop for pushing app changes to a running Pi.
+>
+> **The software architecture below is partly historical.** The project has moved
+> from the single-engine *FluidSynth-over-TCP* design described in this document
+> to a **multi-engine stack over JACK**: USB MIDI → `a2jmidid` → JACK → the active
+> engine (FluidSynth, sfizz, setBfree, Dexed, Pianoteq) → I2S DAC. The Python UI
+> is a control plane that patches the JACK graph and starts/stops engines via
+> `scripts/engine-manager.sh` + `scripts/midi-connect.sh` and a mod-host socket —
+> notes never pass through Python. The **source of truth** for the running system
+> is the `systemd/*.service` units, `scripts/`, `src/synth_ui/`, and
+> [`AUDIO_UPGRADE.md`](AUDIO_UPGRADE.md) — not the FluidSynth-specific details
+> below. The **hardware, boot-config, and RT-tuning** sections below remain
+> accurate.
+
 ## IMPORTANT: Read this entire document before making any changes.
 
 This document describes a working MIDI instrument built on a Raspberry Pi 4. A previous Claude session broke the project. This document provides everything needed to rebuild it correctly.
@@ -56,7 +76,7 @@ NOTE: `display_auto_detect=0` was removed because it disabled the touchscreen.
 
 ### /boot/firmware/cmdline.txt (appended to existing line):
 ```
-isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3
+isolcpus=1,2,3 nohz_full=1,2,3 rcu_nocbs=1,2,3
 ```
 
 ## System Tuning Already Applied
@@ -65,11 +85,15 @@ These are already configured on the Pi and should NOT be changed:
 
 - PREEMPT_RT kernel built from `rpi-6.12.y` branch with `bcm2711_rt_defconfig`
 - CPU governor locked to `performance` via systemd service
-- IRQ affinity pinned to cores 0-1 via systemd service
+- IRQ affinity pinned to core 0 via systemd service (off the isolated audio cores 1,2,3)
 - Swap disabled
 - `/etc/security/limits.conf` has `@audio - rtprio 99` and `@audio - memlock unlimited`
 - User `synth` is in `audio` group
-- Unnecessary services disabled (bluetooth, avahi, cron, timers, etc.)
+- Unnecessary services disabled (bluetooth, cron, timers, etc.). **Exception:**
+  avahi-daemon (mDNS) is deliberately left *enabled* — it publishes
+  `<hostname>.local` (e.g. `synth.local`) so the board is reachable without
+  hunting for its IP. It does no hardware polling and never touches the
+  isolated audio cores, so it was judged not to add meaningful RT jitter.
 
 ## Project Structure
 
@@ -838,8 +862,11 @@ echo "Deploy complete."
 ## Things That MUST NOT Change
 
 1. FluidSynth runs as its own systemd service, NOT managed by Python
-2. FluidSynth runs on cores 2-3 with RT priority 80
-3. Python UI runs on cores 0-1 with normal priority
+2. Audio engines run on the isolated cores: JACK on core 1, the active instrument
+   engine on core 2, effects (reserved) on core 3 — all RT. See
+   docs/engine-architecture.md for the full core allocation.
+3. The Python UI runs on core 0 (shared with the OS), normal priority, Nice=5 —
+   never on the isolated audio cores
 4. Communication between UI and FluidSynth is TCP only (port 9800)
 5. Touch events are FINGERDOWN/FINGERMOTION/FINGERUP with normalized coordinates
 6. The audio device is hw:sndrpihifiberry (by name — never by number, which can shift at boot)

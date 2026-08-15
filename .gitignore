@@ -18,6 +18,7 @@ hardware/pcb/pi-audio-hat/.history
 *-backups/
 *.history/
 fp-info-cache
+*.lck
 
 # Claude
 .claude

@@ -1,13 +1,19 @@
 [Unit]
 Description=MIDI Instrument UI
 After=jack.service mod-host.service
-Requires=jack.service mod-host.service
+# Wants, not Requires: the UI is the control plane and must NOT die when the audio
+# stack restarts (e.g. when the UI itself restarts jack to switch the audio card).
+# It starts after them but its lifecycle is decoupled from theirs.
+Wants=jack.service mod-host.service
 
 [Service]
 Type=simple
 User=synth
 WorkingDirectory=/home/synth/synth/src
-ExecStart=/usr/bin/taskset -c 0,1 /usr/bin/python3 -m synth_ui.main
+# Core 0: the only non-isolated core, shared with the OS. The UI is a low-priority
+# 30 fps control plane — it must stay off the isolated audio cores (1,2,3).
+ExecStart=/usr/bin/taskset -c 0 /usr/bin/python3 -m synth_ui.main
+Nice=5
 Restart=always
 RestartSec=2
 # NOTE: SDL_FBDEV / SDL_MOUSEDEV / SDL_MOUSEDRV are SDL 1.2 variables and are

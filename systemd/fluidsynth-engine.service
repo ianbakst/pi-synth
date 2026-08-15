@@ -6,10 +6,20 @@ Requires=jack.service
 [Service]
 Type=simple
 User=synth
-ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
+# fluidsynth is linked against SDL2, which spawns a background "SDLHotplugALSA"
+# thread that re-enumerates ALSA devices every ~5s. That periodic scan stalls
+# fluidsynth's RT render thread long enough to miss the JACK deadline — a burst
+# of xruns and an audible pop every 5 seconds (setbfree, not SDL-linked, was
+# immune). fluidsynth outputs via -a jack, so SDL's audio backend is unused;
+# forcing it to the dummy driver stops the thread entirely. Same SDL gotcha as
+# the pygame UI (see SDL_AUDIODRIVER in src/synth_ui/ui/app.py).
+Environment=SDL_AUDIODRIVER=dummy
+# Core 2: the instrument engine core.
+ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2 \
     /usr/bin/fluidsynth \
     -a jack \
     -m jack \
+    -o audio.jack.autoconnect=1 \
     -o synth.sample-rate=48000 \
     -o synth.gain=2.0 \
     -o shell.port=9800 \
@@ -18,7 +28,8 @@ ExecStart=/usr/bin/chrt -f 80 /usr/bin/taskset -c 2,3 \
     /home/synth/soundfonts/default.sf2
 LimitRTPRIO=80
 LimitMEMLOCK=infinity
-# Not restarted automatically — started/stopped on demand by engine-manager.sh
+# Not restarted automatically — started/stopped on demand by the UI (EngineManager
+# via `sudo systemctl`).
 
 [Install]
 WantedBy=multi-user.target

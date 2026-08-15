@@ -1,11 +1,16 @@
+import os
+import threading
+
 import pygame
 
 from synth_ui.clients import EngineManager, Preset
+from synth_ui.clients.effects_catalog import EffectCatalogEntry, read_effects_manifest
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
     DEFAULT_GAIN,
-    ENGINE_MANAGER_SCRIPT,
+    DEFAULT_VOICE,
+    EFFECTS_MANIFEST,
     FLUIDSYNTH_HOST,
     FLUIDSYNTH_PORT,
     IS_PI,
@@ -16,7 +21,9 @@ from synth_ui.config import (
     STATE_FILE,
 )
 from synth_ui.ui.event import UIEvent
+from synth_ui.ui.screens.audio import AudioScreen
 from synth_ui.ui.screens.base import Screen
+from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
 from synth_ui.ui.screens.home import HomeScreen
 from synth_ui.ui.screens.preset import PresetScreen
 from synth_ui.ui.screens.splash import SplashScreen
@@ -43,10 +50,17 @@ def _save_state(name: str) -> None:
 
 class SynthUI:
     def __init__(self):
-        # No SDL env setup needed: pygame 2 is SDL2, which uses KMSDRM for video
-        # and auto-scans /dev/input/event* for touch. Touch works as long as this
-        # process's user is in the 'input' group (see setup.sh). The old SDL 1.2
-        # vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
+        # This app never plays audio through pygame — every sound path goes
+        # through JACK (fluidsynth/mod-host) to the DAC. Without this, SDL's
+        # audio mixer opens its own ALSA PCM stream on init and, since the
+        # HiFiBerry is effectively the only playback device once onboard audio
+        # is disabled, fights jackd for it: continuous ALSA underruns and no
+        # audio actually reaching the DAC. Must be set before pygame.init().
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        # No other SDL env setup needed: pygame 2 is SDL2, which uses KMSDRM for
+        # video and auto-scans /dev/input/event* for touch. Touch works as long as
+        # this process's user is in the 'input' group (see setup.sh). The old SDL
+        # 1.2 vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
         pygame.init()
 
         if IS_PI:
@@ -58,13 +72,18 @@ class SynthUI:
         pygame.display.set_caption("MIDI Instrument")
 
         self._engine = EngineManager(
-            engine_manager_script=ENGINE_MANAGER_SCRIPT,
             fluidsynth_host=FLUIDSYNTH_HOST,
             fluidsynth_port=FLUIDSYNTH_PORT,
             mod_host_port=MOD_HOST_PORT,
         )
         self._gain: float = DEFAULT_GAIN
         self._preset_screen: PresetScreen | None = None
+        self._audio_screen: AudioScreen | None = None
+        self._effects_screen: EffectsScreen | None = None
+        self._catalog_screen: EffectsCatalogScreen | None = None
+        self._catalog: list[EffectCatalogEntry] = read_effects_manifest(
+            EFFECTS_MANIFEST
+        )
 
         self._home = HomeScreen(
             on_load_voice=self._engine.load_voice,
@@ -73,7 +92,11 @@ class SynthUI:
             on_gain_change=self._on_gain_change,
             on_save=_save_state,
             on_usb=self._show_usb_screen,
-            initial_name=_load_state(),
+            on_audio=self._show_audio_screen,
+            on_effects=self._show_effects_screen,
+            # Fall back to a default so a freshly flashed card (no ~/.synth-state)
+            # boots straight into a playable instrument.
+            initial_name=_load_state() or DEFAULT_VOICE,
             initial_gain=self._gain,
         )
         self.screen: Screen = SplashScreen()
@@ -121,6 +144,88 @@ class SynthUI:
 
     def _on_usb_copy_complete(self) -> None:
         self._home.refresh()
+
+    def _show_audio_screen(self) -> None:
+        self._audio_screen = AudioScreen(
+            cards=self._engine.list_audio_cards(),
+            current_id=self._engine.current_audio_device(),
+            on_select=self._on_audio_selected,
+            on_back=self._show_home,
+        )
+        self.screen = self._audio_screen
+
+    def _on_audio_selected(self, card_id: str) -> None:
+        # Restarting jack + rebuilding the voice takes seconds — do it off the UI
+        # thread and show a switching state meanwhile.
+        if self._audio_screen is None:
+            return
+        self._audio_screen.set_loading(True)
+        self._audio_screen.header.name = "Switching audio..."
+        threading.Thread(
+            target=self._apply_audio, args=(card_id,), daemon=True
+        ).start()
+
+    def _apply_audio(self, card_id: str) -> None:
+        ok = self._engine.set_audio_device(card_id)
+        if ok:
+            self._show_home()
+        elif self._audio_screen is not None:
+            self._audio_screen.set_loading(False)
+            self._audio_screen.header.error = True
+            self._audio_screen.header.name = "Audio switch failed"
+
+    def _show_effects_screen(self) -> None:
+        # v1 scope: mod-host isn't guaranteed running/warm otherwise — see
+        # EngineManager.effects_available() and docs/engine-architecture.md.
+        if not self._engine.effects_available():
+            self._home.header.error = True
+            self._home.header.name = "Effects need a sfizz/dexed voice active"
+            return
+        self._effects_screen = EffectsScreen(
+            effects=self._engine.effects(),
+            catalog=self._catalog,
+            on_remove=self._on_remove_effect,
+            on_add=self._show_effects_catalog_screen,
+            on_back=self._show_home,
+        )
+        self.screen = self._effects_screen
+
+    def _show_effects_catalog_screen(self) -> None:
+        self._catalog_screen = EffectsCatalogScreen(
+            catalog=self._catalog,
+            on_select=self._on_add_effect,
+            on_back=self._show_effects_screen,
+        )
+        self.screen = self._catalog_screen
+
+    def _on_remove_effect(self, instance: int) -> None:
+        if self._effects_screen is None:
+            return
+        self._effects_screen.set_loading(True)
+        threading.Thread(
+            target=self._remove_effect_worker, args=(instance,), daemon=True
+        ).start()
+
+    def _remove_effect_worker(self, instance: int) -> None:
+        self._engine.remove_effect(instance)
+        self._show_effects_screen()
+
+    def _on_add_effect(self, entry: EffectCatalogEntry) -> None:
+        if self._catalog_screen is None:
+            return
+        self._catalog_screen.set_loading(True)
+        threading.Thread(
+            target=self._add_effect_worker, args=(entry,), daemon=True
+        ).start()
+
+    def _add_effect_worker(self, entry: EffectCatalogEntry) -> None:
+        instance = self._engine.add_effect(entry.uri)
+        if instance is not None:
+            self._show_effects_screen()
+        elif self._catalog_screen is not None:
+            self._catalog_screen.set_loading(False)
+            self._catalog_screen.header.error = True
+            self._catalog_screen.header.name = "Failed to add effect"
 
     def _to_ui_event(self, event: pygame.event.Event) -> UIEvent | None:
         match event.type:
