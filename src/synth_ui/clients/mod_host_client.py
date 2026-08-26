@@ -84,6 +84,12 @@ class ModHostClient:
         """Set a plugin parameter by LV2 symbol (a lv2:ControlPort)."""
         return self._ok(f"param_set {instance} {symbol} {value}")
 
+    def preset_load(self, instance: int, preset_uri: str) -> bool:
+        """Apply an LV2 preset (a preset URI from the plugin's own bundle) to an
+        instance. This is what lets one plugin back many library voices — e.g.
+        several drawbar registrations off a single organ plugin."""
+        return self._ok(f"preset_load {instance} {preset_uri}")
+
     def patch_set(self, instance: int, property_uri: str, value: str) -> bool:
         """Set an LV2 patch property (atom-based), e.g. a plugin's instrument-file
         path. Distinct from set_param: file-loading params like sfizz's SFZ file

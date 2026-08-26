@@ -263,3 +263,66 @@ def test_modhost_load_fails_when_plugin_add_fails():
     e = ModHostEngine(SFIZZ, ctx_for(mod_host=mh))
     assert e.load(SFIZZ) is False
     mh.patch_set.assert_not_called()
+
+
+# --- generic LV2 voices (engine="modhost", URI from the manifest) -----------
+
+MDA_EPIANO = "http://drobilla.net/plugins/mda/EPiano"
+EPIANO = Voice(
+    name="Rhodes EP", engine="modhost", path="", category="EP", uri=MDA_EPIANO
+)
+
+
+def test_generic_modhost_voice_loads_the_uri_from_the_manifest():
+    # The point of Phase A: a new LV2 instrument is a voices.json edit, with no
+    # engine class and no entry in any table in the code.
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    e = ModHostEngine(EPIANO, ctx_for(mod_host=mh))
+    e.start()
+    mh.load_plugin.assert_called_once_with(MDA_EPIANO, 0)
+
+
+def test_generic_modhost_voice_registers_under_the_shared_key():
+    # Same JACK source as sfizz/dexed, so switching between any two LV2
+    # instruments stays an in-place swap rather than a full re-patch.
+    assert ENGINE_REGISTRY["modhost"] is ModHostEngine
+    assert ENGINE_REGISTRY["modhost"].key == ENGINE_REGISTRY["sfizz"].key
+
+
+def test_voice_without_a_uri_fails_instead_of_loading_something_wrong():
+    mh = MagicMock()
+    broken = Voice(name="Broken", engine="modhost", path="", category="")
+    e = ModHostEngine(broken, ctx_for(mod_host=mh))
+    assert e.load(broken) is False
+    mh.load_plugin.assert_not_called()
+
+
+def test_preset_then_params_are_applied_after_the_plugin_loads():
+    # Preset first, params second: a voice starts from a stock LV2 preset and
+    # overrides individual controls. This is what lets one plugin back many
+    # voices (e.g. several organ registrations).
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    mh.preset_load.return_value = True
+    voice = Voice(
+        name="Gospel", engine="modhost", path="", category="Organ",
+        uri=MDA_EPIANO, preset="urn:mda:preset:bright", params={"decay": 0.6},
+    )
+    e = ModHostEngine(voice, ctx_for(mod_host=mh))
+    assert e.load(voice) is True
+    mh.preset_load.assert_called_once_with(0, "urn:mda:preset:bright")
+    mh.set_param.assert_called_once_with(0, "decay", "0.6")
+
+
+def test_a_failed_preset_does_not_fail_the_voice():
+    # A stale preset URI shouldn't cost the user the whole instrument — the
+    # plugin is loaded and playable at its defaults.
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    mh.preset_load.return_value = False
+    voice = Voice(
+        name="Gospel", engine="modhost", path="", category="Organ",
+        uri=MDA_EPIANO, preset="urn:gone",
+    )
+    assert ModHostEngine(voice, ctx_for(mod_host=mh)).load(voice) is True

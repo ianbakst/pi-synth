@@ -14,6 +14,10 @@ INSTRUMENTS_DIR = os.path.expanduser("~/instruments")
 VOICES_MANIFEST = os.path.join(INSTRUMENTS_DIR, "voices.json")
 EFFECTS_MANIFEST = os.path.join(INSTRUMENTS_DIR, "effects.json")
 STATE_FILE = os.path.expanduser("~/.synth-state")
+# Saved rigs (instrument + effects chain + level). Unlike voices.json — a
+# read-only catalog shipped in the image — this is the user's own work, created
+# on the device, so it lives in $HOME and is written atomically.
+RIGS_FILE = os.path.expanduser("~/.synth-rigs.json")
 
 # Selected ALSA card id (e.g. "sndrpihifiberry"). The UI writes it; scripts/
 # start-jack.sh reads it to pick JACK's device. Absent = auto-detect (default).
@@ -45,13 +49,39 @@ TOUCH_DEVICE = "/dev/input/event4"
 DEFAULT_GAIN = 2.0
 MAX_GAIN = 5.0
 
+# --- Master chain (permanent tail of the signal path; see clients/master_chain.py) ---
+# Every voice and every effect feeds through this, so it's where per-voice level
+# trim is applied and where a limiter protects the DAC.
+#
+# UNVERIFIED: these URIs and control symbols are inferred, not confirmed on
+# hardware. Check with `python3 -m synth_ui.tools.verify_voices --list` and
+# `--inspect <uri>`; a stage whose plugin is missing is skipped, so a wrong URI
+# costs level control, not sound. Calf's level_in is a linear multiplier, not
+# decibels — hence trim_unit.
+MASTER_LIMITER_URI = "http://calf.sourceforge.net/plugins/Limiter"
+MASTER_CHAIN: list[dict] = [
+    {
+        "uri": MASTER_LIMITER_URI,
+        "params": {"limit": 0.89},  # ~ -1 dBFS ceiling
+        "trim_symbol": "level_in",
+        "trim_unit": "linear",
+    },
+]
+
+# Volume slider position (linear, 0..MAX_GAIN) that means "unity" on the master
+# chain. The slider is converted to dB around this point.
+UNITY_GAIN = 1.0
+
 # --- Colors ---
 BG = (20, 20, 25)
 PANEL_BG = (30, 30, 38)
 BTN_NORMAL = (45, 45, 55)
 BTN_ACTIVE = (60, 130, 180)
+# Voices whose plugin or instrument file isn't present on this unit.
+BTN_DISABLED = (32, 32, 38)
 TEXT_PRIMARY = (240, 240, 245)
 TEXT_SECONDARY = (160, 160, 170)
+TEXT_DISABLED = (105, 105, 115)
 TEXT_ACTIVE = (255, 255, 255)
 SLIDER_BG = (50, 50, 60)
 SLIDER_FILL = (60, 130, 180)

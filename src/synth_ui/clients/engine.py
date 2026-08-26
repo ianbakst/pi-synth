@@ -34,27 +34,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from synth_ui.clients.jack_graph import JackGraph
+from synth_ui.clients.lv2 import GENERIC_ENGINE, PluginSpec, spec_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.synth_client import FluidSynthController
 from synth_ui.clients.voice import Voice
 from synth_ui.config import SOUNDFONT_DIR
 
 logger = logging.getLogger(__name__)
-
-# engine -> (plugin URI, LV2 patch-property URI for its instrument file).
-# The instrument file is an atom-based patch:writable property, loaded via
-# mod-host `patch_set` — NOT a control port (param_set silently no-ops). The
-# sfizz values are confirmed on hardware (jack_lsp / mod-host logs). Verify plugin
-# URIs with `lv2ls`.
-_MODHOST_PLUGINS: dict[str, tuple[str, str]] = {
-    "sfizz": (
-        "http://sfztools.github.io/sfizz",
-        "http://sfztools.github.io/sfizz:sfzfile",
-    ),
-    # TODO(dexed): unbuilt, and its .syx-load property URI is unverified on
-    # hardware. Empty file-property => plugin loads but no cartridge is set.
-    "dexed": ("https://asb2m10.github.io/dexed", ""),
-}
 
 # Runs `sudo systemctl <action> <unit>` and returns the exit code. Injectable so
 # tests don't shell out.
@@ -211,10 +197,19 @@ class PianoteqEngine(ProcessEngine):
 _MOD_HOST_START_TIMEOUT = 10.0
 
 
+def _spec(voice: Voice) -> PluginSpec | None:
+    return spec_for(voice.engine, voice.uri, voice.file_property)
+
+
 class ModHostEngine(Engine):
-    """sfizz + dexed: LV2 plugins hosted in mod-host. They share one plugin slot
-    (instance 0) and mod-host's stable JACK ports, so switching between them is
-    an in-place plugin swap, never a JACK re-patch.
+    """Any LV2 instrument hosted in mod-host. All such voices share one plugin
+    slot (instance 0) and mod-host's stable JACK ports, so switching between
+    them is an in-place plugin swap, never a JACK re-patch.
+
+    Which plugin comes from the voice, not from a table here: `engine:
+    "modhost"` plus a `uri` is enough, so a new LV2 instrument is a voices.json
+    edit. (`sfizz`/`dexed` still name their engine instead of a URI; see
+    lv2.PLUGIN_SPECS.)
 
     mod-host itself is on-demand here (started/stopped like any ProcessEngine's
     unit), not always-running: hardware validation showed mod-host sitting on
@@ -270,9 +265,13 @@ class ModHostEngine(Engine):
         initializing (LV2 plugin world scan), so the first add can bounce with an
         error or get no response at all. Retry the load itself, not just the
         socket connect, until mod-host is actually ready to host a plugin."""
+        spec = _spec(voice)
+        if spec is None:
+            logger.error("voice '%s' names no LV2 plugin URI", voice.name)
+            return False
         deadline = time.monotonic() + timeout
         while True:
-            if self._ensure_plugin(voice):
+            if self._ensure_plugin(spec):
                 return True
             if time.monotonic() >= deadline:
                 logger.error("mod-host did not become ready within %.1fs", timeout)
@@ -280,28 +279,43 @@ class ModHostEngine(Engine):
             time.sleep(0.2)
 
     def load(self, voice: Voice) -> bool:
-        if not self._ensure_plugin(voice):
+        spec = _spec(voice)
+        if spec is None:
+            logger.error("voice '%s' names no LV2 plugin URI", voice.name)
             return False
-        _, file_property = _MODHOST_PLUGINS[voice.engine]
-        if not voice.path or not file_property:
+        if not self._ensure_plugin(spec):
+            return False
+
+        # Preset first, then explicit params — so a voice can start from a stock
+        # LV2 preset and override a few controls (e.g. one b_synth registration
+        # per organ voice). This is what lets one plugin back many voices.
+        if voice.preset and not self.ctx.mod_host.preset_load(
+            self._instance, voice.preset
+        ):
+            logger.error("mod-host failed to load preset %s", voice.preset)
+        for symbol, value in voice.params.items():
+            self.ctx.mod_host.set_param(self._instance, symbol, str(value))
+
+        if not voice.path or not spec.file_property:
             return True
         # The instrument file is an LV2 patch property (atom), set via patch_set.
         # param_set can't reach it — that was why sfizz loaded but stayed on its
         # default instrument (silent). No quotes: mod-host takes the rest of the
         # line as the value.
-        return self.ctx.mod_host.patch_set(self._instance, file_property, voice.path)
+        return self.ctx.mod_host.patch_set(
+            self._instance, spec.file_property, voice.path
+        )
 
-    def _ensure_plugin(self, voice: Voice) -> bool:
+    def _ensure_plugin(self, spec: PluginSpec) -> bool:
         """Load the plugin for this voice, swapping the current one if different."""
-        uri, _ = _MODHOST_PLUGINS[voice.engine]
-        if self._loaded_uri == uri:
+        if self._loaded_uri == spec.uri:
             return True
         self.ctx.mod_host.remove_plugin(self._instance)  # clear any current plugin
-        if not self.ctx.mod_host.load_plugin(uri, self._instance):
-            logger.error("mod-host failed to load %s (%s)", voice.engine, uri)
+        if not self.ctx.mod_host.load_plugin(spec.uri, self._instance):
+            logger.error("mod-host failed to load plugin %s", spec.uri)
             self._loaded_uri = None
             return False
-        self._loaded_uri = uri
+        self._loaded_uri = spec.uri
         return True
 
 
@@ -311,6 +325,10 @@ ENGINE_REGISTRY: dict[str, type[Engine]] = {
     "fluidsynth": FluidSynthEngine,
     "setbfree": SetBfreeEngine,
     "pianoteq": PianoteqEngine,
+    # Any LV2 instrument: the voice carries the URI. Adding one is a manifest
+    # edit, not a code change.
+    GENERIC_ENGINE: ModHostEngine,
+    # Legacy engine names for the two plugins that predate `modhost`.
     "sfizz": ModHostEngine,
     "dexed": ModHostEngine,
 }

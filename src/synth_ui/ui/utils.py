@@ -2,7 +2,13 @@ import getpass
 import glob
 import os
 
-from synth_ui.clients.voice import Voice, read_voices_manifest as _read_manifest
+from synth_ui.clients.lv2 import LV2World
+from synth_ui.clients.voice import Voice, annotate
+from synth_ui.clients.voice import read_voices_manifest as _read_manifest
+
+# One LV2 world for the process: it caches `lv2ls` output, so refreshing the
+# voice list (e.g. after a USB copy) doesn't re-scan the plugin world each time.
+_lv2 = LV2World()
 
 
 def scan_soundfonts(directory: str) -> list[str]:
@@ -14,19 +20,23 @@ def scan_soundfonts(directory: str) -> list[str]:
 
 
 def load_voices(manifest_path: str, soundfont_dir: str) -> list[Voice]:
-    """Return voices from manifest, falling back to soundfont directory scan."""
+    """Return voices from manifest, falling back to soundfont directory scan.
+
+    Every voice is annotated with why it can't be used here (missing file,
+    plugin never built), so the UI can show that up front instead of the user
+    discovering it by tapping — see clients/voice.py validate().
+    """
     voices = _read_manifest(manifest_path)
-    if voices:
-        return voices
-    # Fallback: treat every SF2/SF3 in soundfont_dir as a FluidSynth voice
-    for path in scan_soundfonts(soundfont_dir):
-        voices.append(Voice(
-            name=display_name(path),
-            engine="fluidsynth",
-            path=path,
-            category="General MIDI",
-        ))
-    return voices
+    if not voices:
+        # Fallback: treat every SF2/SF3 in soundfont_dir as a FluidSynth voice
+        for path in scan_soundfonts(soundfont_dir):
+            voices.append(Voice(
+                name=display_name(path),
+                engine="fluidsynth",
+                path=path,
+                category="General MIDI",
+            ))
+    return annotate(voices, has_uri=_lv2.has)
 
 
 def scan_usb_soundfonts(exclude_dir: str) -> list[str]:

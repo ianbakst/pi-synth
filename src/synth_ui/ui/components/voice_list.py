@@ -6,6 +6,7 @@ from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
     BTN_ACTIVE,
+    BTN_DISABLED,
     BTN_H,
     BTN_MARGIN,
     BTN_NORMAL,
@@ -14,6 +15,7 @@ from synth_ui.config import (
     SLIDER_BG,
     SLIDER_FILL,
     TEXT_ACTIVE,
+    TEXT_DISABLED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
@@ -71,14 +73,24 @@ class VoiceList(Component):
             if btn_y + BTN_H < 0 or btn_y > self.rect.height:
                 continue
 
-            color = BTN_ACTIVE if i == self.selected_index else BTN_NORMAL
+            if not voice.available:
+                color = BTN_DISABLED
+            elif i == self.selected_index:
+                color = BTN_ACTIVE
+            else:
+                color = BTN_NORMAL
             btn_rect = pygame.Rect(
                 BTN_PAD_X, btn_y, list_rect.width - BTN_PAD_X * 2, BTN_H
             )
             pygame.draw.rect(clip, color, btn_rect, border_radius=6)
 
             name = voice.name
-            text_color = TEXT_ACTIVE if i == self.selected_index else TEXT_PRIMARY
+            if not voice.available:
+                text_color = TEXT_DISABLED
+            elif i == self.selected_index:
+                text_color = TEXT_ACTIVE
+            else:
+                text_color = TEXT_PRIMARY
             text = self.font_medium.render(name, True, text_color)
             max_text_w = btn_rect.width - 100
             if text.get_width() > max_text_w:
@@ -87,8 +99,20 @@ class VoiceList(Component):
                     text = self.font_medium.render(name, True, text_color)
             clip.blit(text, (btn_rect.x + 12, btn_rect.y + 10))
 
-            sub = f"{voice.category}  ·  {voice.engine}" if voice.category else voice.engine
-            sub_text = self.font_small.render(sub, True, TEXT_SECONDARY)
+            # An unusable voice says why right in the list — the manifest ships
+            # in the image and can outrun what's actually installed, so "file
+            # missing" / "plugin not installed" belongs on screen, not in a log.
+            if not voice.available:
+                sub = voice.unavailable_reason
+                sub_color = TEXT_DISABLED
+            else:
+                sub = (
+                    f"{voice.category}  ·  {voice.engine}"
+                    if voice.category
+                    else voice.engine
+                )
+                sub_color = TEXT_SECONDARY
+            sub_text = self.font_small.render(sub, True, sub_color)
             clip.blit(sub_text, (btn_rect.x + 12, btn_rect.y + 36))
 
         if total_h > self.rect.height and max_scroll > 0:
@@ -112,8 +136,11 @@ class VoiceList(Component):
             return
         relative_y = y - self.rect.y + self.scroll_offset
         index = int(relative_y / (BTN_H + BTN_MARGIN))
-        if 0 <= index < len(self.voices) and index != self.selected_index:
-            self.on_select(index, self.voices[index])
+        if not 0 <= index < len(self.voices) or index == self.selected_index:
+            return
+        if not self.voices[index].available:
+            return  # greyed out; the row already shows why
+        self.on_select(index, self.voices[index])
 
     def handle_event(self, event: UIEvent) -> bool:
         if event.type == pygame.FINGERDOWN:

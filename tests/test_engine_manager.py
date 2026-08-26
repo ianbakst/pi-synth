@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 from synth_ui.clients.audio_devices import AudioDevices
 from synth_ui.clients.effects_rack import EffectsRack
 from synth_ui.clients.engine_manager import EngineManager
+from synth_ui.clients.master_chain import sink_for
+from synth_ui.clients.rig import Rig, RigEffect
 from synth_ui.clients.voice import Voice
 
 APLAY = (
@@ -118,16 +120,48 @@ class ModFake(_Rec):
     audio = ("mod-host:o1", "mod-host:o2")
 
 
-def make_mgr(jack=None):
+class FakeMaster:
+    """Stand-in for MasterChain. `ready=False` (the default) models a unit whose
+    master plugins aren't installed, where everything routes straight to the DAC."""
+
+    def __init__(self, ready=False, ports=("effect_90:in_l", "effect_90:in_r")):
+        self.ready = ready
+        self._ports = list(ports)
+        self.volume_db: float | None = None
+        self.trim_db: float | None = None
+        self.torn_down = False
+
+    def ensure(self):
+        return self.ready
+
+    def teardown(self):
+        self.torn_down = True
+
+    def is_ready(self):
+        return self.ready
+
+    def input_ports(self):
+        return list(self._ports) if self.ready else []
+
+    def set_volume_db(self, db):
+        self.volume_db = db
+
+    def set_trim_db(self, db):
+        self.trim_db = db
+
+
+def make_mgr(jack=None, master=None):
     EVENTS.clear()
-    m = EngineManager()
+    # start_timeout=0: no master-chain bring-up retry loop in tests.
+    m = EngineManager(start_timeout=0)
     m._jack = jack or FakeJack()
     m._mod_host = MagicMock()
     m._registry = {"fluidsynth": FluidFake, "sfizz": ModFake, "dexed": ModFake}
-    # __init__ already built self._effects against the pre-swap real jack/mod_host;
-    # rebuild it against the fakes above so effects tests never touch real JACK.
-    m._effects = EffectsRack(m._jack, m._mod_host)
-    m._ctx.mod_host_needed = lambda: not m._effects.is_empty()
+    # __init__ already built self._effects/_master against the pre-swap real
+    # jack/mod_host; rebuild against the fakes so tests never touch real JACK.
+    m._master = master or FakeMaster()
+    m._effects = EffectsRack(m._jack, m._mod_host, sink=sink_for(m._master, m._jack))
+    m._ctx.mod_host_needed = lambda: True
     return m
 
 
@@ -273,11 +307,15 @@ EFFECT_10_AND_11_PORTS = {
 }
 
 
-def test_effects_available_only_while_modhost_engine_active():
+def test_effects_are_available_under_every_voice():
+    # Reversal of prior behaviour: effects used to require a mod-host instrument
+    # to be active, so the Hammond and the GM piano could never have reverb.
+    # mod-host is always up now (it hosts the master chain), so the rack is
+    # always reachable — a process engine just feeds it over JACK.
     m = make_mgr()
-    assert m.effects_available() is False
+    assert m.effects_available() is True
     m.load_voice(GM)
-    assert m.effects_available() is False
+    assert m.effects_available() is True
     m.load_voice(SFIZZ)
     assert m.effects_available() is True
 
@@ -314,11 +352,130 @@ def test_remove_first_effect_rewires_instrument_to_new_first():
     assert ("mod-host:o1", "effect_11:in_left") in jack.connects
 
 
-def test_mod_host_needed_reflects_effects_rack_state():
+def test_mod_host_is_never_stopped_by_an_instrument_switch():
+    # mod-host hosts the master chain, which every voice feeds through, so
+    # ModHostEngine.stop() must leave the process running whatever the rack
+    # holds. Stopping it would take the whole output path down with the
+    # instrument.
     jack = FakeJack(ports=EFFECT_10_PORTS)
     m = make_mgr(jack)
-    assert m._ctx.mod_host_needed() is False
+    assert m._ctx.mod_host_needed() is True
     assert m.add_effect("urn:reverb") == 10
     assert m._ctx.mod_host_needed() is True
     m.remove_effect(10)
-    assert m._ctx.mod_host_needed() is False
+    assert m._ctx.mod_host_needed() is True
+
+
+# --- master chain routing + level ------------------------------------------
+
+def test_instrument_routes_through_the_master_chain_when_it_is_up():
+    jack = FakeJack()
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    assert m.load_voice(GM) is True
+    assert ("fluidsynth:l", "effect_90:in_l") in jack.connects
+    assert ("fluidsynth:r", "effect_90:in_r") in jack.connects
+    # the master owns the leg to the DAC; the instrument must not bypass it
+    assert ("fluidsynth:l", "system:playback_1") not in jack.connects
+
+
+def test_instrument_falls_back_to_the_dac_when_no_master_chain_loaded():
+    # A missing master plugin costs level control, never sound.
+    jack = FakeJack()
+    m = make_mgr(jack, master=FakeMaster(ready=False))
+    assert m.load_voice(GM) is True
+    assert ("fluidsynth:l", "system:playback_1") in jack.connects
+
+
+def test_effects_rack_tail_feeds_the_master_not_the_dac():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    assert m.add_effect("urn:reverb") == 10
+    assert ("effect_10:out_left", "effect_90:in_l") in jack.connects
+    assert ("effect_10:out_left", "system:playback_1") not in jack.connects
+
+
+def test_loading_a_voice_applies_its_measured_trim():
+    # The whole point of gain_trim_db: switching instruments shouldn't jump in
+    # level. Applied before the engine makes sound, not after.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    quiet = Voice("Quiet", "fluidsynth", "/sf/q.sf2", "GM", gain_trim_db=-4.5)
+    assert m.load_voice(quiet) is True
+    assert master.trim_db == -4.5
+
+
+def test_volume_reaches_every_voice_not_just_fluidsynth():
+    # set_gain used to only reach fluidsynth, so most voices had no volume
+    # control at all.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    m.load_voice(SFIZZ)
+    m.set_gain(1.0)
+    assert master.volume_db == 0.0     # UNITY_GAIN -> 0 dB
+    m.set_gain(0.5)
+    assert abs(master.volume_db - -6.02) < 0.05
+    m.set_gain(0.0)
+    assert master.volume_db == -60.0   # silence floor, not a tiny gain
+
+
+def test_volume_falls_back_to_fluidsynth_without_a_master_chain():
+    m = make_mgr(master=FakeMaster(ready=False))
+    m._fluidsynth = MagicMock()
+    m.load_voice(GM)
+    m.set_gain(2.0)
+    m._fluidsynth.set_gain.assert_called_once_with(2.0)
+
+
+def test_changing_audio_card_rebuilds_the_master_chain(tmp_path):
+    # mod-host cycles with jack, so its plugins are gone: stale wiring must be
+    # dropped and the chain rebuilt before the voice is re-established.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    m._audio_device_file = str(tmp_path / "dev")
+    m._ctx.systemctl = lambda argv: 0
+    m.load_voice(GM)
+    assert m.set_audio_device("Headphones") is True
+    assert master.torn_down is True
+
+
+# --- rigs -------------------------------------------------------------------
+
+def test_load_rig_applies_chain_then_instrument_then_level():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    master = FakeMaster(ready=True)
+    m = make_mgr(jack, master=master)
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano", gain_trim_db=-2.0)
+    rig = Rig(name="Wet Piano", voice="Piano", effects=[RigEffect("urn:reverb")],
+              trim_db=-1.0)
+
+    assert m.load_rig(rig, voice) is True
+    # effects settled before the instrument was wired into the chain head
+    assert ("mod-host:o1", "effect_10:in_left") in jack.connects
+    # rig trim stacks on the voice's calibrated trim
+    assert master.trim_db == -3.0
+
+
+def test_switching_rigs_reuses_a_shared_effect():
+    jack = FakeJack(ports=EFFECT_10_AND_11_PORTS)
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano")
+    m.load_rig(Rig(name="A", voice="Piano", effects=[RigEffect("urn:reverb")]), voice)
+    m._mod_host.reset_mock()
+
+    m.load_rig(
+        Rig(name="B", voice="Piano",
+            effects=[RigEffect("urn:reverb"), RigEffect("urn:delay")]),
+        voice,
+    )
+    # the shared reverb was never re-instantiated
+    m._mod_host.load_plugin.assert_called_once_with("urn:delay", 11)
+
+
+def test_selecting_a_catalog_voice_drops_the_rig_trim():
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano", gain_trim_db=-2.0)
+    m.load_rig(Rig(name="A", voice="Piano", trim_db=-5.0), voice)
+    assert master.trim_db == -7.0
+    m.load_voice(voice)      # straight from the catalog, no rig
+    assert master.trim_db == -2.0

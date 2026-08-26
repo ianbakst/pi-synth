@@ -13,6 +13,16 @@ ca-certificates
 libsndfile1-dev
 libjack-jackd2-dev
 liblilv-dev
+# lv2ls / lv2info: the UI reads lv2ls to grey out voices whose plugin isn't
+# installed, and `python3 -m synth_ui.tools.verify_voices --inspect` uses
+# lv2info to discover a plugin's control symbols + patch properties.
+lilv-utils
+# Level calibration (python3 -m synth_ui.tools.calibrate_levels): plays a fixed
+# passage into each voice, records the master chain, and measures EBU R128
+# loudness to derive each voice's gain_trim_db.
+jack-capture
+jack-tools
+ffmpeg
 libreadline-dev
 # LV2 effect plugins hosted by the effects mod-host (reverb/delay/chorus/EQ/comp).
 # Confirm available URIs on the Pi with `lv2ls`. Add/trim to taste.

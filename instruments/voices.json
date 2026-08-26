@@ -1,5 +1,54 @@
 [
   {
+    "name": "Rhodes EP",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/EPiano",
+    "category": "Electric Piano",
+    "resident": true
+  },
+  {
+    "name": "DX10 FM",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/DX10",
+    "category": "Electric Piano",
+    "resident": true
+  },
+  {
+    "name": "MDA Piano",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/Piano",
+    "category": "Piano",
+    "resident": true
+  },
+  {
+    "name": "JX10 Analog",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/JX10",
+    "category": "Synth",
+    "resident": true
+  },
+  {
+    "name": "Combo Organ",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/Organ",
+    "category": "Organ",
+    "resident": true
+  },
+  {
+    "name": "Calf Organ",
+    "engine": "modhost",
+    "uri": "http://calf.sourceforge.net/plugins/Organ",
+    "category": "Organ",
+    "resident": true
+  },
+  {
+    "name": "Calf Monosynth",
+    "engine": "modhost",
+    "uri": "http://calf.sourceforge.net/plugins/Monosynth",
+    "category": "Synth",
+    "resident": true
+  },
+  {
     "name": "LivingRoom Upright",
     "engine": "sfizz",
     "path": "/home/synth/instruments/piano/livingroom/livingroom-upright.sfz",
