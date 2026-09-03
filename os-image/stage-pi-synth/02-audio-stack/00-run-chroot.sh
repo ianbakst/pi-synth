@@ -21,6 +21,25 @@ if ! command -v mod-host >/dev/null 2>&1 && [ ! -x /usr/local/bin/mod-host ]; th
 	ldconfig
 fi
 
+# --- mod-ttymidi -> /usr/local/bin/ttymidi ---
+# The serial->JACK MIDI bridge for the 5-pin DIN MIDI IN jack on UART0 (GPIO15).
+# From mod-audio, same org as mod-host above; it's what MOD ships for DIN MIDI on
+# their own hardware. Chosen over the various ttymidi forks because it is
+# JACK-native (registers ttymidi:MIDI_in as JackPortIsPhysical|JackPortIsTerminal,
+# exactly like a2jmidid does for USB keyboards, which is what lets JackGraph treat
+# both transports under one rule), it sets a true 31250 baud via BOTHER/TCSETS2
+# rather than needing the midi-uart0 clock-fudge overlay, and it handles MIDI
+# running status and realtime bytes.
+#
+# Only the binary is installed: `make install` would also drop a JACK internal
+# client (ttymidi.so) into jack's libdir, which we don't load.
+if [ ! -x /usr/local/bin/ttymidi ]; then
+	echo "Building mod-ttymidi ..."
+	git clone --depth 1 https://github.com/mod-audio/mod-ttymidi.git "${BUILD}/mod-ttymidi"
+	make -C "${BUILD}/mod-ttymidi" ttymidi -j"$(nproc)"
+	install -m 755 "${BUILD}/mod-ttymidi/ttymidi" /usr/local/bin/ttymidi
+fi
+
 # --- sfizz LV2 plugin -> /usr/local/lib/lv2/sfizz.lv2 ---
 # The LV2 plugin lives in the sfizz-UI repo, NOT sfztools/sfizz (that repo builds
 # only the core library + a standalone JACK client we don't use). mod-host loads

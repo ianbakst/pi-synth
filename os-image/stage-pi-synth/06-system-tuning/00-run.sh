@@ -12,6 +12,30 @@ mkdir -p "${ROOTFS_DIR}/etc/systemd/journald.conf.d"
 install -m 644 files/journald-volatile.conf \
 	"${ROOTFS_DIR}/etc/systemd/journald.conf.d/volatile.conf"
 
+# --- RemoveIPC=no: stop SSH logouts from killing the audio stack ---
+# systemd-logind defaults to RemoveIPC=yes, which destroys every POSIX shared
+# memory segment and semaphore owned by a *normal* user (uid >= 1000) as soon as
+# that user's last login session ends. jackd runs as 'synth' (uid 1000) as a
+# system service, so an `ssh synth@host '<cmd>'` one-liner — a session that opens
+# and immediately closes — wipes /dev/shm/jack_default_1000_0, jack_db-1000/ and
+# every jack_sem.* out from under the running server.
+#
+# The failure is nastily silent: jackd holds open fds to the now-unlinked inodes,
+# so it keeps running and systemd keeps reporting `active`, but every path is
+# gone, so no client can ever connect again. Symptom is a synth that plays fine
+# until the first SSH login, then goes permanently quiet with every JACK client
+# failing "Cannot connect to server socket err = No such file or directory" —
+# diagnosed on hardware by `ls -l /proc/$(pgrep jackd)/fd` showing every JACK
+# file marked "(deleted)" against an empty /dev/shm.
+#
+# The appliance has no reason to reap IPC on logout, and admin here is entirely
+# over SSH, so this would fire constantly. Alternative fixes (running jackd as a
+# system uid < 1000, or `loginctl enable-linger synth`) are more invasive for the
+# same effect.
+mkdir -p "${ROOTFS_DIR}/etc/systemd/logind.conf.d"
+install -m 644 files/logind-keep-ipc.conf \
+	"${ROOTFS_DIR}/etc/systemd/logind.conf.d/10-keep-ipc.conf"
+
 on_chroot << 'EOF'
 set -e
 # No swap on an appliance (removes a page-fault jitter source). WiFi + SSH are

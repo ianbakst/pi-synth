@@ -3,14 +3,16 @@
 # Install and enable the systemd units. Unit files are the single source of
 # truth in ../../systemd (copied from the repo, not duplicated here).
 #
-# Always-on at boot:  cpu-performance, jack, a2jmidid, mod-host, synth-ui
+# Always-on at boot:  cpu-performance, jack, a2jmidid, ttymidi, mod-host, synth-ui
 # On-demand (started by the UI / EngineManager via systemctl, NOT enabled):
 #                     fluidsynth-engine, setbfree
 #   mod-host is always-on again: it hosts the master chain (trim + limiter) that
 #   every voice and every effect feeds through, so it can't be tied to whether a
 #   mod-host *instrument* happens to be active. See systemd/mod-host.service for
 #   the pi4 xrun history this reverses, and docs/voice-library.md.
-for unit in cpu-performance jack a2jmidid mod-host \
+#   ttymidi is the DIN-MIDI counterpart to a2jmidid (USB): always-on, but its
+#   ConditionPathExists=/dev/ttyAMA0 makes it inert on a board with no UART MIDI.
+for unit in cpu-performance jack a2jmidid ttymidi mod-host \
             fluidsynth-engine setbfree synth-ui; do
 	install -m 644 "${PI_SYNTH_SRC}/systemd/${unit}.service" \
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"
@@ -47,6 +49,7 @@ systemctl --global mask fluidsynth.service 2>/dev/null || true
 systemctl enable cpu-performance.service
 systemctl enable jack.service
 systemctl enable a2jmidid.service
+systemctl enable ttymidi.service
 systemctl enable mod-host.service
 systemctl enable synth-ui.service
 EOF

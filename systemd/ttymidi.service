@@ -1,0 +1,34 @@
+[Unit]
+Description=Serial-to-JACK MIDI bridge for the DIN MIDI IN jack (mod-ttymidi)
+# The DIN half of MIDI ingress. USB keyboards reach JACK through a2jmidid; the
+# 5-pin DIN jack is wired to UART0 RX (GPIO15) and reaches JACK through this.
+# Both register their ports as physical+terminal JACK MIDI sources, which is the
+# single rule JackGraph.keyboard_midi_sources() matches on — so the UI wires a
+# DIN keyboard to the active instrument exactly as it wires a USB one, with no
+# knowledge of the transport. See docs/engine-architecture.md.
+After=jack.service
+Requires=jack.service
+PartOf=jack.service
+# No UART, no bridge. Keeps this a no-op on a board built without
+# dtparam=uart0=on (pi4 gets ttyAMA0 from dtoverlay=disable-bt instead) rather
+# than a restart loop. See os-image/stage-pi-synth/03-boot-config/00-run.sh.
+ConditionPathExists=/dev/ttyAMA0
+
+[Service]
+Type=simple
+User=synth
+# -b 31250: the real MIDI rate, set via BOTHER/TCSETS2. Do NOT pair this with
+# dtoverlay=midi-uart0-pi5 — that overlay skews the UART clock so that a
+# *requested* 38400 lands on 31250, and asking for 31250 on top of it would come
+# out near 25.4k. If the overlay is ever needed, this becomes -b 38400.
+#
+# Pinned to core 1 alongside jack and a2jmidid: it's a blocking read feeding a
+# ringbuffer, not DSP, and it must stay off the instrument/effects cores (2,3).
+# It raises its own threads to SCHED_FIFO, hence LimitRTPRIO.
+ExecStart=/usr/bin/taskset -c 1 /usr/local/bin/ttymidi -s /dev/ttyAMA0 -b 31250 -n ttymidi
+LimitRTPRIO=90
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

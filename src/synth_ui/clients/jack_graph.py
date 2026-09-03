@@ -56,6 +56,7 @@ class Port:
     name: str
     type: str = "other"          # "audio" | "midi" | "other"
     is_output: bool = False      # True = source (produces), False = sink (consumes)
+    is_physical: bool = False    # True = a real jack on the box, not a software port
     connections: list[str] = field(default_factory=list)
 
     @property
@@ -93,9 +94,13 @@ class JackGraph:
             ports.setdefault(name, Port(name)).type = ptype
 
         # -p: each port name followed by an indented "properties: output,..." line.
+        # "physical" marks a port that fronts real hardware — a DAC channel, or a
+        # MIDI jack bridged in by a2jmidid/ttymidi. See keyboard_midi_sources.
         for name, attrs in self._grouped(self._lsp("-p")):
             blob = " ".join(attrs).lower()
-            ports.setdefault(name, Port(name)).is_output = "output" in blob
+            port = ports.setdefault(name, Port(name))
+            port.is_output = "output" in blob
+            port.is_physical = "physical" in blob
 
         # -c: each port name followed by its connected ports (indented).
         for name, attrs in self._grouped(self._lsp("-c")):
@@ -109,6 +114,7 @@ class JackGraph:
         client: str | None = None,
         type: str | None = None,
         is_output: bool | None = None,
+        is_physical: bool | None = None,
         contains: str | None = None,
         snapshot: dict[str, Port] | None = None,
     ) -> list[str]:
@@ -127,6 +133,8 @@ class JackGraph:
                 continue
             if is_output is not None and p.is_output != is_output:
                 continue
+            if is_physical is not None and p.is_physical != is_physical:
+                continue
             if contains is not None and contains.lower() not in name.lower():
                 continue
             out.append(name)
@@ -135,13 +143,28 @@ class JackGraph:
     def keyboard_midi_sources(
         self, snapshot: dict[str, Port] | None = None
     ) -> list[str]:
-        """Hardware keyboard MIDI, bridged into JACK by a2jmidid: the a2j
-        *capture* ports (MIDI outputs that produce the keyboard's notes)."""
+        """Hardware keyboard MIDI, whatever jack it arrived through: every
+        *physical* MIDI source port (a MIDI output, i.e. one that produces the
+        keyboard's notes).
+
+        Deliberately not "the ports of client X". Two bridges feed this box —
+        a2jmidid for USB keyboards, ttymidi for the 5-pin DIN jack on UART0 —
+        and both mark their ports JackPortIsPhysical|JackPortIsTerminal, which
+        is exactly the claim "this is a real jack on the box, not a software
+        port". Matching on that instead of on a client name is what keeps
+        EngineManager transport-agnostic: a third transport (a second DIN,
+        BLE/RTP-MIDI, or the DIN arriving via ALSA should the kernel ever gain
+        snd_serial_generic) is wired to the active instrument with no code
+        change here. Software MIDI clients — engines, Midi Through — are not
+        physical and so are never mistaken for a keyboard.
+
+        `physical` + `output` already identifies a capture port, so no name
+        matching is needed; a2j's "(capture)" naming is not depended on.
+        """
         return self.ports(
-            client="a2j",
             type="midi",
             is_output=True,
-            contains="capture",
+            is_physical=True,
             snapshot=snapshot,
         )
 
