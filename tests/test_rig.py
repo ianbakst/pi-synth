@@ -164,3 +164,34 @@ def test_bootstrap_leaves_an_existing_library_alone(tmp_path):
     lib.create_from_voice("Hammond B3")
     lib.bootstrap("General MIDI")
     assert lib.names() == ["Hammond B3"]
+
+
+def test_rename_persists(tmp_path):
+    path = str(tmp_path / "rigs.json")
+    lib = RigLibrary(path)
+    rig = lib.create_from_voice("Hammond B3")
+    assert lib.rename(rig, "Gospel B3") == "Gospel B3"
+    assert RigLibrary.load(path).names() == ["Gospel B3"]
+
+
+def test_rename_onto_an_existing_name_is_deduplicated(tmp_path):
+    # Two rigs answering to one name would make get() only ever find the first.
+    lib = RigLibrary(str(tmp_path / "rigs.json"))
+    lib.create_from_voice("Rhodes EP")
+    other = lib.create_from_voice("Hammond B3")
+    assert lib.rename(other, "Rhodes EP") == "Rhodes EP 2"
+    assert sorted(lib.names()) == ["Rhodes EP", "Rhodes EP 2"]
+
+
+def test_renaming_a_rig_to_its_own_name_is_a_noop(tmp_path):
+    # Must not treat the rig itself as a collision and become "X 2".
+    lib = RigLibrary(str(tmp_path / "rigs.json"))
+    rig = lib.create_from_voice("Rhodes EP")
+    assert lib.rename(rig, "Rhodes EP") == "Rhodes EP"
+    assert lib.names() == ["Rhodes EP"]
+
+
+def test_an_empty_rename_keeps_the_old_name(tmp_path):
+    lib = RigLibrary(str(tmp_path / "rigs.json"))
+    rig = lib.create_from_voice("Rhodes EP")
+    assert lib.rename(rig, "   ") == "Rhodes EP"

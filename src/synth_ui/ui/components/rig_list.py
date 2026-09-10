@@ -33,6 +33,7 @@ from synth_ui.ui.components.base import Component
 from synth_ui.ui.event import UIEvent
 
 _REMOVE_W = 48
+_EDIT_W = 48
 
 
 class RigList(Component):
@@ -44,6 +45,7 @@ class RigList(Component):
         font_small: pygame.font.Font,
         on_select: Callable[[int, Rig], None],
         on_remove: Callable[[Rig], None],
+        on_edit: Callable[[Rig], None] | None = None,
         effect_names: dict[str, str] | None = None,
         unavailable: Callable[[Rig], str] | None = None,
     ):
@@ -53,6 +55,7 @@ class RigList(Component):
         self.font_small = font_small
         self.on_select = on_select
         self.on_remove = on_remove
+        self.on_edit = on_edit or (lambda rig: None)
         # uri -> display name, from the effects catalog; falls back to the URI's
         # last path segment for anything not in the catalog.
         self._effect_names = effect_names or {}
@@ -118,7 +121,7 @@ class RigList(Component):
 
             name = rig.name
             text = self.font_medium.render(name, True, text_color)
-            max_text_w = btn_rect.width - _REMOVE_W - 24
+            max_text_w = btn_rect.width - _REMOVE_W - _EDIT_W - 24
             if text.get_width() > max_text_w:
                 while text.get_width() > max_text_w and len(name) > 3:
                     name = name[:-4] + "..."
@@ -128,21 +131,25 @@ class RigList(Component):
             sub = reason or self._summary(rig)
             sub_color = TEXT_DISABLED if reason else TEXT_SECONDARY
             sub_surf = self.font_small.render(sub, True, sub_color)
-            max_sub_w = btn_rect.width - _REMOVE_W - 24
+            max_sub_w = btn_rect.width - _REMOVE_W - _EDIT_W - 24
             if sub_surf.get_width() > max_sub_w:
                 while sub_surf.get_width() > max_sub_w and len(sub) > 3:
                     sub = sub[:-4] + "..."
                     sub_surf = self.font_small.render(sub, True, sub_color)
             clip.blit(sub_surf, (btn_rect.x + 12, btn_rect.y + 36))
 
-            x_surf = self.font_medium.render("x", True, TEXT_SECONDARY)
-            clip.blit(
-                x_surf,
-                (
-                    btn_rect.right - _REMOVE_W // 2 - x_surf.get_width() // 2,
-                    btn_rect.y + (BTN_H - x_surf.get_height()) // 2,
-                ),
-            )
+            for offset, glyph in (
+                (_REMOVE_W // 2, "x"),
+                (_REMOVE_W + _EDIT_W // 2, "..."),   # rename
+            ):
+                surf = self.font_medium.render(glyph, True, TEXT_SECONDARY)
+                clip.blit(
+                    surf,
+                    (
+                        btn_rect.right - offset - surf.get_width() // 2,
+                        btn_rect.y + (BTN_H - surf.get_height()) // 2,
+                    ),
+                )
 
         if total_h > self.rect.height and max_scroll > 0:
             bar_x = self.rect.right - SCROLL_BAR_W
@@ -171,9 +178,14 @@ class RigList(Component):
             return
         rig = self.rigs[index]
 
+        # Right-hand zones, outermost first: delete, then rename. Selecting the
+        # rig is the rest of the row.
         row_right = self.rect.x + self.rect.width - SCROLL_BAR_W - BTN_PAD_X
         if x >= row_right - _REMOVE_W:
             self.on_remove(rig)
+            return
+        if x >= row_right - _REMOVE_W - _EDIT_W:
+            self.on_edit(rig)
             return
 
         if self._unavailable(rig):

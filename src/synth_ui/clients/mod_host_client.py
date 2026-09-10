@@ -84,6 +84,21 @@ class ModHostClient:
         """Set a plugin parameter by LV2 symbol (a lv2:ControlPort)."""
         return self._ok(f"param_set {instance} {symbol} {value}")
 
+    def bypass(self, instance: int, bypassed: bool) -> bool:
+        """Bypass/unbypass a plugin instance.
+
+        This is what makes instant voice switching possible: instruments stay
+        instantiated and a switch flips which one is live, instead of unloading
+        and re-instantiating (which is the slow part — an LV2 world scan and,
+        for samplers, re-reading the library).
+
+        Note we don't rely on bypass alone for silence. Whether mod-host's
+        bypass skips the plugin's run() or merely passes audio through is a
+        property of mod-host, not something we can assume; EngineManager also
+        disconnects an inactive instrument's MIDI, so a bypassed voice gets no
+        notes either way."""
+        return self._ok(f"bypass {instance} {1 if bypassed else 0}")
+
     def preset_load(self, instance: int, preset_uri: str) -> bool:
         """Apply an LV2 preset (a preset URI from the plugin's own bundle) to an
         instance. This is what lets one plugin back many library voices — e.g.

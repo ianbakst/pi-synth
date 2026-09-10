@@ -39,12 +39,13 @@ def test_reads_lv2_voice_with_full_schema(tmp_path):
 def test_legacy_entries_still_parse(tmp_path):
     """The pre-existing 4-field schema must keep working unchanged."""
     manifest = write_manifest(tmp_path, [{
-        "name": "Hammond B3", "engine": "setbfree", "path": "", "category": "Organ",
+        "name": "General MIDI", "engine": "fluidsynth",
+        "path": "/sf/gm.sf2", "category": "General MIDI",
     }])
     (voice,) = read_voices_manifest(manifest)
-    assert voice.name == "Hammond B3"
-    assert voice.engine == "setbfree"
-    assert voice.category == "Organ"
+    assert voice.name == "General MIDI"
+    assert voice.engine == "fluidsynth"
+    assert voice.category == "General MIDI"
     assert voice.uri == "" and voice.params == {} and voice.resident is False
 
 

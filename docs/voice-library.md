@@ -51,7 +51,7 @@ else — no engine class, no table in the code:
 
 | field | meaning |
 |---|---|
-| `engine` | `modhost` for any LV2 instrument. `sfizz`/`dexed` are legacy aliases that carry their URI in `lv2.PLUGIN_SPECS`; `fluidsynth`/`setbfree`/`pianoteq` are the remaining process engines |
+| `engine` | `modhost` for any LV2 instrument. `sfizz`/`dexed` are legacy aliases that carry their URI in `lv2.PLUGIN_SPECS`; `fluidsynth`/`pianoteq` are the remaining process engines |
 | `uri` | LV2 plugin URI. Required for `modhost` |
 | `path` | instrument file (SFZ/SF2/.syx), if the plugin takes one |
 | `file_property` | the LV2 **patch property** `path` is set through. Patch properties are atom-based and only reachable via mod-host `patch_set` — `param_set` silently no-ops on them, which is what made sfizz load-but-stay-silent |
@@ -60,9 +60,38 @@ else — no engine class, no table in the code:
 | `gain_trim_db` | per-voice output trim, so switching from a sampled piano to a B3 doesn't jump in level. Consumed by the master gain stage (Phase D) |
 | `resident` | keep this plugin instantiated rather than loading on demand — the basis of instant switching. Only for plugins cheap in RAM; **not** large sample libraries |
 
-`preset` + `params` are the library multiplier: one `b_synth` instance with
-different drawbar registrations *is* Gospel B3, Rock B3, and Jazz B3 as three
-library entries.
+`preset` + `params` are the library multiplier — one plugin backing several
+entries. Note which lever applies: `params` needs the plugin to expose control
+ports, and some don't. b_synth has **none** (setBfree takes drawbars, Leslie and
+percussion over MIDI CC), so multiple organ registrations have to go through
+`preset` and its `state#interface`, not `params`.
+
+## SoundFont voices: one file is a library
+
+A `.sf2` holds up to 128 programs per bank. Naming only the *file* collapsed all
+of `fluid-soundfont-gm` — already installed — into a single "General MIDI" entry,
+leaving its Rhodes, Wurlitzer, drawbar organ and synth brass unreachable. `bank`
+and `program` fix that:
+
+```json
+{ "name": "Wurlitzer", "engine": "fluidsynth",
+  "path": "/home/synth/soundfonts/default.sf2",
+  "category": "Electric Piano", "program": 5 }
+```
+
+`program: -1` (the default) means "don't select", preserving old behaviour.
+Switching between two voices from the same font is a `select` on the already
+resident font — no reload, no restart.
+
+`FluidSynthController.current_sfont_id()` exists because the engine boots with
+the default font as sfont **1**, so a font loaded later is not 1; selecting a
+program on 1 would quietly play an instrument from the wrong font. That was
+latent before `program` existed and only became reachable with it.
+
+These voices are process-engine voices, so they run fluidsynth on core 2
+alongside mod-host — the pairing the pi4 xrun note warns about. They still feed
+the master chain and the effects rack like everything else, which is what makes
+a plain GM Rhodes usable: put a chorus and a reverb after it.
 
 ## Validation
 
@@ -101,9 +130,10 @@ Calf Monosynth. Tiny CPU, instant load, no instrument file. These are in
 `voices.json` now — **their URIs are inferred and unverified**; run
 `verify_voices` on the board, and anything wrong greys out rather than breaking.
 
-**Apt.** `setbfree` is already installed and should also ship the `b_synth` LV2
-(Leslie included) — that moves the Hammond into mod-host and retires
-`setbfree.service`. `amsynth` is light with a large preset bank.
+**Apt.** `setbfree` ships the `b_synth` LV2 (Leslie included) at
+`/usr/lib/lv2/b_synth` — that *is* the Hammond now, and the package must stay
+installed even though its standalone binary is no longer run. `amsynth` is light
+with a large preset bank if more analog synth voices are wanted.
 
 **Needs a build** (`02-audio-stack`). Dexed, only if DX7 specifically matters —
 mda DX10 plus amsynth cover much of that ground for free.
@@ -158,6 +188,43 @@ It's a starting point, not the last word: measured loudness and "sits right when
 I play it" differ, and a voice matched at medium touch can still diverge when you
 dig in — that's velocity response, a separate axis from gain. The by-ear nudge on
 top is what a rig's `trim_db` stores.
+
+## Residency — why switching is fast
+
+`clients/slots.py` (`InstrumentSlots`) keeps instrument plugins **instantiated**.
+A switch between two loaded voices is a bypass flip plus a JACK re-patch; nothing
+is instantiated, no LV2 world is scanned, no sample library is re-read. That is
+the payoff the whole consolidation was for — putting instruments in one host was
+the means, not the end.
+
+Two kinds of voice, because RAM is finite:
+
+- `resident: true` — small synths (mda, Calf). Each keeps its own slot in `0-8`.
+  When they outnumber the slots, the least recently used is evicted: bounded
+  memory, nothing to configure.
+- `resident: false` — large sample libraries. Several resident would blow the RAM
+  budget, so they share the scratch slot `9` and pay the load cost on switch. The
+  old behaviour, now confined to the voices that actually need it.
+
+A slot is matched on plugin URI **and** instrument file: two sfizz voices are one
+plugin but different pianos, and treating them as interchangeable would leave you
+playing the wrong one.
+
+**The correctness consequence, which is easy to miss.** Switching used to unload
+the outgoing instrument, and jackd dropped its edges automatically because the
+ports vanished. Resident instruments keep their ports, so nothing drops them —
+without an explicit disconnect the previous voice would go on receiving the
+keyboard and go on feeding the sink, i.e. two instruments sounding at once.
+`EngineManager._unwire` does that, still connect-before-disconnect so there's no
+silent gap, and it leaves alone any port shared with the incoming engine.
+
+**Bypass isn't trusted for silence.** Whether mod-host's `bypass` skips the
+plugin's `run()` or merely passes audio through is mod-host's business, not
+something we can assume — so an inactive instrument is bypassed *and* has its
+MIDI disconnected. It gets no notes either way. If bypass turns out to be a true
+skip, resident voices are also free at idle; if it isn't, they cost some DSP and
+the eviction bound is what keeps that in check. Worth measuring with
+`journalctl -u jack | grep -c XRun` as the resident set grows.
 
 ## Rigs
 
@@ -219,14 +286,32 @@ only the voice is.
   `EngineManager.load_rig`, and the rig-first UI (rig list, voice picker,
   effects writing back to the rig). Gaps: no rename (needs a touch keyboard),
   and a rig doesn't store a soundfont program.
-- **B — residency.** Multi-instance `ModHostEngine`: allocate instruments to
-  instances 0–9, honour `resident`, switch by `bypass` + re-patch instead of
-  load. sfizz stays one shared slot that swaps its SFZ (libraries are too big to
-  hold N resident). **Verify first:** whether mod-host's `bypass` actually skips
-  `lilv_instance_run` or merely mutes — if it only mutes, fall back to
-  disconnecting MIDI, which is fine for synths but leaks sampler release tails.
+- **B — residency. Done.** See below.
 - **C — Hammond to `b_synth`**, retire `setbfree.service`.
-- **E — SF2.** Either Calf Fluidsynth in mod-host (retiring `fluidsynth-engine`
+- **C — Hammond into mod-host. Done.** `b_synth` (setBfree's own DSP) is the
+  Hammond; `setbfree.service`, its sudoers entry and `SetBfreeEngine` are gone.
+  **The `setbfree` apt package stays** — Debian ships the LV2 bundle at
+  `/usr/lib/lv2/b_synth` (no `.lv2` suffix, which is why a path-based build guard
+  missed it and built a redundant copy). Plugin builds are now guarded on the URI
+  via `lv2ls`, not on a guessed path.
+
+  b_synth exposes **no control ports** — drawbars, Leslie and percussion are MIDI
+  CC. So registrations can't live in a voice's `params`. It does implement
+  `state#interface`, so the route to Gospel/Rock/Jazz variants is mod-host
+  `preset_save` on a live-adjusted organ, recalled through the existing
+  `Voice.preset` → `preset_load`. Deferred until the engine migration is done.
+- **E — the last process engine.** Both are now the same problem: get an
+  LV2 plugin at the head of the chain so nothing needs its own service.
+  `02-audio-stack` builds **b_synth** (setBfree's own DSP as a plugin — the same
+  tonewheels, key click, percussion and Leslie, which is why it beats Calf Organ
+  or mda Combo for a B3) and **Fluida** (a SoundFont player). Both entries exist
+  in `lv2.PLUGIN_SPECS`; Fluida's `file_property` is the one unknown, and
+  `verify_voices --inspect` now answers it directly. Migrating the 20 GM voices
+  is then a change of `engine`/`uri` per entry — `bank`/`program` carry over
+  unchanged. **Fallback if Fluida doesn't expose the soundfont headlessly:**
+  convert the .sf2 to SFZ and use sfizz, which is already built and proven; it
+  costs disk and load time but adds no new plugin at all.
+- **E (old framing — superseded by C/E above).** Either Calf Fluidsynth in mod-host (retiring `fluidsynth-engine`
   and `synth_client.py`) or drop GM for a curated library. Open question: whether
   GM program-change browsing (`list_presets`/`select_preset`) is worth
   preserving.

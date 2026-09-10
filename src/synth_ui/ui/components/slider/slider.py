@@ -30,6 +30,7 @@ class Slider(Component):
         max_value: float = 100.0,
         label: str | None = None,
         font: Font | None = None,
+        format_value: Callable[[float], str] | None = None,
     ):
         super().__init__(rect)
         self.min_value = min_value
@@ -38,6 +39,10 @@ class Slider(Component):
         self.on_change = on_change
         self.label = label
         self.font = font
+        # How the current value reads. Defaults to a percentage of the
+        # range, which is right for volume but nonsense for a bipolar
+        # control -- -3 dB on a -12..+12 slider is not "37%".
+        self.format_value = format_value or (lambda v: f"{int(self._ratio() * 100)}%")
         self.dragging = False
         self._track = Rect(rect.x + 16, rect.y + 38, rect.width - 32, 24)
 
@@ -60,7 +65,7 @@ class Slider(Component):
                 self.font.render(self.label, True, TEXT_SECONDARY),
                 (self.rect.x + 16, self.rect.y + 10),
             )
-            pct = self.font.render(f"{int(self._ratio() * 100)}%", True, TEXT_PRIMARY)
+            pct = self.font.render(self.format_value(self.value), True, TEXT_PRIMARY)
             surface.blit(pct, (self.rect.right - pct.get_width() - 16, self.rect.y + 10))
 
         ratio = self._ratio()

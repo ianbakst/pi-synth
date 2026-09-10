@@ -167,6 +167,23 @@ class RigLibrary:
         self.rigs.append(rig)
         self.save()
 
+    def rename(self, rig: Rig, new_name: str) -> str:
+        """Rename in place and persist. Returns the name actually used.
+
+        Not `replace()`: that matches on the name, which is the very thing
+        changing. Routed through unique_name() so a rename can't collide with an
+        existing rig and leave two entries answering to one name — `get()` would
+        then only ever find the first."""
+        new_name = new_name.strip()
+        if not new_name or new_name == rig.name:
+            return rig.name
+        # unique_name would otherwise count this rig itself as a collision.
+        others = [r for r in self.rigs if r is not rig]
+        candidate = RigLibrary(self.path, others).unique_name(new_name)
+        rig.name = candidate
+        self.save()
+        return candidate
+
     def remove(self, name: str) -> None:
         self.rigs = [r for r in self.rigs if r.name != name]
         self.save()

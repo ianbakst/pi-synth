@@ -25,7 +25,7 @@ def test_generic_engine_without_a_uri_is_unresolvable():
 
 def test_process_engines_are_not_lv2():
     assert spec_for("fluidsynth") is None
-    assert spec_for("setbfree") is None
+    assert spec_for("pianoteq") is None
 
 
 def test_manifest_overrides_win_over_the_built_in_spec():

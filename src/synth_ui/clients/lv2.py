@@ -49,6 +49,12 @@ PLUGIN_SPECS: dict[str, PluginSpec] = {
     # unconfirmed. Empty file_property => the plugin loads but no cartridge is
     # set. `verify-voices --inspect` on the board is how to fill this in.
     "dexed": PluginSpec(uri="https://asb2m10.github.io/dexed"),
+    # SoundFont player, replacing the fluidsynth process + its TCP shell.
+    # TODO: file_property unconfirmed — run `verify_voices --inspect` on the
+    # board once Fluida is built. Without it the plugin loads but plays no
+    # soundfont, which validation reports as "no file property for this plugin"
+    # rather than failing silently.
+    "fluida": PluginSpec(uri="https://github.com/brummer10/Fluida.lv2"),
 }
 
 # The generic engine name for "any LV2 instrument, URI given by the voice".
@@ -63,7 +69,7 @@ def spec_for(
 ) -> PluginSpec | None:
     """Resolve an engine name (+ optional manifest overrides) to a PluginSpec.
 
-    Returns None for engines that aren't mod-host-hosted (fluidsynth, setbfree,
+    Returns None for engines that aren't mod-host-hosted (fluidsynth,
     pianoteq) and for a generic voice that forgot its `uri`. Manifest values win
     over the built-in spec, so a voice can pin a URI or supply a file property
     that isn't codified here yet.

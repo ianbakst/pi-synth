@@ -30,14 +30,14 @@ from synth_ui.clients.lv2 import MODHOST_ENGINES, spec_for
 
 # Engines backed by a systemd unit rather than an LV2 plugin. Kept here (rather
 # than imported from engine.py) so validation stays free of JACK/subprocess deps.
-PROCESS_ENGINES = frozenset({"fluidsynth", "setbfree", "pianoteq"})
+PROCESS_ENGINES = frozenset({"fluidsynth", "pianoteq"})
 KNOWN_ENGINES = PROCESS_ENGINES | MODHOST_ENGINES
 
 
 @dataclass
 class Voice:
     name: str
-    engine: str      # "modhost" | "sfizz" | "dexed" | "fluidsynth" | "setbfree" | ...
+    engine: str      # "modhost" | "sfizz" | "dexed" | "fluidsynth" | ...
     path: str        # SF2/SFZ/.syx instrument file; empty when the plugin needs none
     category: str    # "Piano" | "Organ" | "Electric Piano" | ...
 
@@ -46,6 +46,14 @@ class Voice:
     file_property: str = ""    # LV2 patch property `path` is set through
     preset: str = ""           # LV2 preset URI applied after instantiation
     params: dict[str, float] = field(default_factory=dict)  # control symbol -> value
+
+    # --- SoundFont voices ---
+    # Which instrument *inside* the soundfont. A .sf2 holds up to 128 programs
+    # per bank, so without this the whole GM set collapses to a single "General
+    # MIDI" voice and its Rhodes, Wurlitzer, organ and synth brass are
+    # unreachable. -1 = don't select, keep whatever the engine loaded.
+    bank: int = 0
+    program: int = -1
 
     # --- Library-level settings ---
     # Per-voice output trim, so switching between a sampled piano and a B3
@@ -87,6 +95,8 @@ def _voice_from_entry(entry: dict) -> Voice:
         file_property=entry.get("file_property", ""),
         preset=entry.get("preset", ""),
         params={k: float(v) for k, v in (entry.get("params") or {}).items()},
+        bank=int(entry.get("bank", 0)),
+        program=int(entry.get("program", -1)),
         gain_trim_db=float(entry.get("gain_trim_db", 0.0)),
         resident=bool(entry.get("resident", False)),
     )

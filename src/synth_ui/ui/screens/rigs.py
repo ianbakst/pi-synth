@@ -35,6 +35,7 @@ class RigsScreen(Screen):
         rigs: list[Rig],
         on_load_rig: Callable[[Rig], bool],
         on_remove_rig: Callable[[Rig], None],
+        on_edit_rig: Callable[[Rig], None],
         on_new: Callable,
         on_edit: Callable,
         on_audio: Callable,
@@ -70,6 +71,7 @@ class RigsScreen(Screen):
             font_small=font_small,
             on_select=self._on_rig_select,
             on_remove=on_remove_rig,
+            on_edit=on_edit_rig,
             effect_names=effect_names,
             unavailable=unavailable,
         )

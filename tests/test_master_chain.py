@@ -7,7 +7,7 @@ from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 LIMITER = "http://calf.sourceforge.net/plugins/Limiter"
 GAIN = "http://example.org/gain"
 
-TRIM_STAGE = MasterStage(uri=GAIN, trim_symbol="gain", trim_unit="db")
+TRIM_STAGE = MasterStage(uri=GAIN, trim_symbol="gain", unit="db")
 LIMIT_STAGE = MasterStage(uri=LIMITER, params={"limit": 0.89})
 
 
@@ -131,24 +131,51 @@ def test_sink_prefers_the_master_chain_when_it_is_up():
 
 # --- level ------------------------------------------------------------------
 
-def make_chain(unit="db"):
+def make_chain(unit="db", **kw):
     mh = MagicMock()
     mh.load_plugin.return_value = True
-    stage = MasterStage(uri=GAIN, trim_symbol="gain", trim_unit=unit)
+    stage = MasterStage(uri=GAIN, trim_symbol="gain", unit=unit, **kw)
     chain = MasterChain(FakeJack(audio_ports(90)), mh, [stage], lv2=world(GAIN))
     chain.ensure()
     mh.reset_mock()
     return chain, mh
 
 
-def test_volume_and_trim_are_summed_into_one_control():
-    # They're the same physical gain set by two concerns: the user's volume and
-    # the voice's measured offset.
+def test_volume_and_trim_collapse_when_only_one_gain_control_exists():
     chain, mh = make_chain()
     chain.set_volume_db(-6.0)
     chain.set_trim_db(-3.0)
     assert chain.level_db == -9.0
     assert mh.set_param.call_args.args == (90, "gain", "-9.0")
+
+
+def test_trim_goes_pre_limiter_and_volume_post():
+    # Separate ports so a hot voice is still limited (trim before) while the
+    # volume control doesn't change how hard the limiter works (volume after).
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    stage = MasterStage(
+        uri=GAIN, trim_symbol="level_in", volume_symbol="level_out", unit="db"
+    )
+    chain = MasterChain(FakeJack(audio_ports(90)), mh, [stage], lv2=world(GAIN))
+    chain.ensure()
+    mh.reset_mock()
+
+    chain.set_trim_db(-3.0)
+    chain.set_volume_db(-6.0)
+    calls = dict((c.args[1], c.args[2]) for c in mh.set_param.call_args_list)
+    assert calls["level_in"] == "-3.0"
+    assert calls["level_out"] == "-6.0"
+
+
+def test_values_are_clamped_into_the_port_range():
+    # Calf's gains bottom out at 1/64; sending 0 for "silence" would be an
+    # out-of-range value, not a quiet one.
+    chain, mh = make_chain(unit="linear", minimum=0.015625, maximum=64.0)
+    chain.set_volume_db(-90.0)
+    assert float(mh.set_param.call_args.args[2]) == 0.015625
+    chain.set_volume_db(48.0)
+    assert float(mh.set_param.call_args.args[2]) == 64.0
 
 
 def test_linear_control_gets_a_multiplier_not_decibels():
@@ -159,7 +186,7 @@ def test_linear_control_gets_a_multiplier_not_decibels():
     assert abs(value - 0.501) < 0.001
 
 
-def test_silence_floor_maps_to_zero_on_a_linear_control():
+def test_silence_floor_maps_to_zero_on_an_unbounded_linear_control():
     chain, mh = make_chain(unit="linear")
     chain.set_volume_db(-90.0)
     assert float(mh.set_param.call_args.args[2]) == 0.0

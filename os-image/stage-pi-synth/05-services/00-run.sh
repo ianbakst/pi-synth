@@ -5,7 +5,7 @@
 #
 # Always-on at boot:  cpu-performance, jack, a2jmidid, ttymidi, mod-host, synth-ui
 # On-demand (started by the UI / EngineManager via systemctl, NOT enabled):
-#                     fluidsynth-engine, setbfree
+#                     fluidsynth-engine
 #   mod-host is always-on again: it hosts the master chain (trim + limiter) that
 #   every voice and every effect feeds through, so it can't be tied to whether a
 #   mod-host *instrument* happens to be active. See systemd/mod-host.service for
@@ -13,7 +13,7 @@
 #   ttymidi is the DIN-MIDI counterpart to a2jmidid (USB): always-on, but its
 #   ConditionPathExists=/dev/ttyAMA0 makes it inert on a board with no UART MIDI.
 for unit in cpu-performance jack a2jmidid ttymidi mod-host \
-            fluidsynth-engine setbfree synth-ui; do
+            fluidsynth-engine synth-ui; do
 	install -m 644 "${PI_SYNTH_SRC}/systemd/${unit}.service" \
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"
 done

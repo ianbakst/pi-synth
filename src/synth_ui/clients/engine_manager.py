@@ -33,6 +33,7 @@ from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import Rig, plan
+from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.synth_client import FluidSynthController, Preset
 from synth_ui.clients.voice import Voice
 from synth_ui.config import AUDIO_DEVICE_FILE, MASTER_CHAIN, UNITY_GAIN
@@ -81,8 +82,15 @@ class EngineManager:
         )
         self._mod_host = ModHostClient(host=mod_host_host, port=mod_host_port)
         self._jack = JackGraph()
+        # Instrument plugins stay loaded across switches; this owns which
+        # instance holds what (see slots.py). Shared by every ModHostEngine, so
+        # it has to outlive them — the manager owns it, not the engine.
+        self._slots = InstrumentSlots(self._mod_host)
         self._ctx = EngineContext(
-            jack=self._jack, mod_host=self._mod_host, fluidsynth=self._fluidsynth
+            jack=self._jack,
+            mod_host=self._mod_host,
+            fluidsynth=self._fluidsynth,
+            slots=self._slots,
         )
         # The master chain is the permanent tail: everything — every instrument
         # and the whole effects rack — feeds through it into the DAC. It carries
@@ -157,13 +165,18 @@ class EngineManager:
         self._rig_trim_db = 0.0
         self._master.set_trim_db(voice.gain_trim_db)
 
-        # Same JACK source already active -> reload in place (no restart, no gap).
+        # Same engine already active -> switch in place (no restart, no gap).
         if self._active is not None and self._active.key == engine_cls.key:
+            # Capture the outgoing ports *first*: with instruments resident, a
+            # mod-host voice change moves to a different instance whose ports
+            # are different, and the old instance's ports don't disappear —
+            # they'd keep taking MIDI and feeding the sink alongside the new
+            # one. (For fluidsynth the ports are stable and this is a no-op.)
+            prev_midi, prev_outs = self._active.midi_port, self._active.audio_out_ports
             ok = self._active.load(voice)
             self._active.voice = voice
-            # Re-patch (idempotent): covers mod-host recreating a plugin's audio
-            # ports on a sfizz<->dexed swap; a no-op for fluidsynth's stable ports.
-            self._wire(self._active)
+            self._wire(self._active)                        # connect new first,
+            self._unwire(prev_midi, prev_outs, keep=self._active)  # then drop old
             return ok
 
         return self._switch_to(engine_cls, voice)
@@ -188,6 +201,14 @@ class EngineManager:
         self._rig_trim_db = rig.trim_db
         self._master.set_trim_db(voice.gain_trim_db + rig.trim_db)
         return ok
+
+    def set_rig_trim(self, db: float) -> None:
+        """The by-ear level nudge for the active rig, on top of its voice's
+        measured `gain_trim_db` (see tools/calibrate_levels). Applied live so
+        it's audible while the slider moves; persistence is the UI's job."""
+        self._rig_trim_db = db
+        voice_trim = self._active.voice.gain_trim_db if self._active else 0.0
+        self._master.set_trim_db(voice_trim + db)
 
     def list_presets(self) -> list[Preset]:
         if self._is_active("fluidsynth"):
@@ -241,10 +262,11 @@ class EngineManager:
         if not self._wait_audio_stack():
             return False
 
-        # mod-host cycles with jack (PartOf), so its plugins — including the
-        # master chain — are gone. Drop the stale bookkeeping and rebuild before
-        # re-establishing the voice, or the voice would be wired to ports that
-        # no longer exist.
+        # mod-host cycles with jack (PartOf), so its plugins — the master chain
+        # and every resident instrument — are gone. Drop the stale bookkeeping
+        # and rebuild before re-establishing the voice, or we'd "reuse" slots
+        # that no longer hold anything.
+        self._slots.clear()
         self._master.teardown()
         self.start()
         self._master.set_volume_db(self._volume_db)
@@ -303,12 +325,36 @@ class EngineManager:
         old = self._active
         if old is not None:
             old.panic()
-            # Stopping old removes its JACK ports; jackd drops their connections
-            # automatically, so no explicit disconnect is needed.
+            old_midi, old_outs = old.midi_port, old.audio_out_ports
             old.stop()
+            self._unwire(old_midi, old_outs, keep=new)
 
         self._active = new
         return True
+
+    def _unwire(
+        self, midi_port: str | None, audio_outs: list[str], keep: Engine
+    ) -> None:
+        """Drop the previous instrument's connections.
+
+        This used to be unnecessary: tearing an engine down removed its JACK
+        ports and jackd dropped the edges for us. Instruments now stay loaded
+        (see slots.py), so an inactive mod-host instrument keeps its ports —
+        and without this it would go on receiving the keyboard and feeding the
+        sink, i.e. two instruments sounding at once.
+
+        Ports shared with the incoming engine are left alone, so a switch that
+        lands on the same instance doesn't disconnect what was just wired."""
+        keep_outs = set(keep.audio_out_ports)
+        if midi_port and midi_port != keep.midi_port:
+            for src in self._jack.keyboard_midi_sources():
+                self._jack.disconnect(src, midi_port)
+        sinks = self._sinks()
+        for src in audio_outs:
+            if src in keep_outs:
+                continue
+            for dst in sinks:
+                self._jack.disconnect(src, dst)
 
     def _wire(self, engine: Engine) -> None:
         """Patch keyboard MIDI -> engine, and engine audio -> DAC (or, if the
@@ -326,15 +372,19 @@ class EngineManager:
         # instrument -> rack (if any) -> master (if up) -> DAC. Each stage owns
         # only its own outgoing leg; this one moves on every instrument switch.
         outs = engine.audio_out_ports
-        if self._effects.is_empty():
-            sinks = self._master.input_ports() or self._jack.dac_sinks()
-        else:
-            sinks = self._effects.input_ports()
+        sinks = self._sinks()
         if outs and sinks:
             for src, dst in zip(outs, sinks):
                 self._jack.connect(src, dst)
         else:
             logger.warning("no audio-out/DAC ports to wire for engine '%s'", engine.key)
+
+    def _sinks(self) -> list[str]:
+        """Where the active instrument's audio goes: the head of the effects
+        rack if there is one, otherwise the master chain, otherwise the DAC."""
+        if self._effects.is_empty():
+            return self._master.input_ports() or self._jack.dac_sinks()
+        return self._effects.input_ports()
 
     def _is_active(self, key: str) -> bool:
         return self._active is not None and self._active.key == key

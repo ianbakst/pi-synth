@@ -86,6 +86,24 @@ if [ "${CONTINUE:-0}" != "1" ]; then
     docker rm -v pigen_work >/dev/null 2>&1 && echo "Removed stale pigen_work container" || true
 fi
 
+# CONTINUE=1 without a work dir for THIS board is always a mistake, and used to
+# be a silent, expensive one: pi-gen's work dir is keyed on IMG_NAME, which
+# differs per board, so `CONTINUE=1 ./build.sh` after a cm5 build found nothing
+# to resume and quietly ran a full *pi4* build instead. 45 minutes later you get
+# an image with kernel8.img that a BCM2712 board won't boot — no display, no
+# network, nothing to diagnose from.
+if [ "${CONTINUE:-0}" = "1" ]; then
+    IMG_NAME_FOR_BOARD="pi-synth"
+    [ "${PI_SYNTH_BOARD}" = "cm5" ] && IMG_NAME_FOR_BOARD="pi-synth-cm5"
+    if [ ! -d "${OS_IMAGE}/pi-gen/work/${IMG_NAME_FOR_BOARD}" ]; then
+        other=$(ls -d "${OS_IMAGE}"/pi-gen/work/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')
+        die "CONTINUE=1 but no build to resume for board '${PI_SYNTH_BOARD}' (expected work/${IMG_NAME_FOR_BOARD}).
+       Found instead: ${other:-nothing}
+       Did you mean:  PI_SYNTH_BOARD=cm5 CONTINUE=1 ./build.sh ?
+       Resuming with the wrong board silently builds a full image for the wrong hardware."
+    fi
+fi
+
 # Expose this repo to the container, and pass the board selection through as an
 # env var — os-image/config (sourced inside the container) reads it from there
 # and re-exports it for the stage scripts, mirroring how PI_SYNTH_SRC works.

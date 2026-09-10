@@ -11,6 +11,7 @@ from synth_ui.clients.effects_rack import EffectsRack
 from synth_ui.clients.engine_manager import EngineManager
 from synth_ui.clients.master_chain import sink_for
 from synth_ui.clients.rig import Rig, RigEffect
+from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.voice import Voice
 
 APLAY = (
@@ -157,8 +158,11 @@ def make_mgr(jack=None, master=None):
     m._jack = jack or FakeJack()
     m._mod_host = MagicMock()
     m._registry = {"fluidsynth": FluidFake, "sfizz": ModFake, "dexed": ModFake}
-    # __init__ already built self._effects/_master against the pre-swap real
-    # jack/mod_host; rebuild against the fakes so tests never touch real JACK.
+    # __init__ already built self._effects/_master/_slots against the pre-swap
+    # real jack/mod_host; rebuild against the fakes so tests never touch real
+    # JACK or a mod-host socket.
+    m._slots = InstrumentSlots(m._mod_host)
+    m._ctx.slots = m._slots
     m._master = master or FakeMaster()
     m._effects = EffectsRack(m._jack, m._mod_host, sink=sink_for(m._master, m._jack))
     m._ctx.mod_host_needed = lambda: True
@@ -479,3 +483,96 @@ def test_selecting_a_catalog_voice_drops_the_rig_trim():
     assert master.trim_db == -7.0
     m.load_voice(voice)      # straight from the catalog, no rig
     assert master.trim_db == -2.0
+
+
+# --- residency: inactive instruments keep their ports -----------------------
+
+class SlotFake(_Rec):
+    """A mod-host engine whose ports move per voice, as resident slots do."""
+
+    key = "modhost"
+    jack_client = "mod-host"
+
+    def load(self, voice):
+        self.calls.append(("load", voice.name))
+        self.midi = f"effect_{voice.name}:control"
+        self.audio = (f"effect_{voice.name}:o1", f"effect_{voice.name}:o2")
+        return True
+
+
+def test_switching_within_mod_host_disconnects_the_previous_instrument():
+    # Instruments stay loaded now, so jackd no longer drops the old edges when
+    # a voice is torn down. Without an explicit disconnect the previous voice
+    # would keep taking MIDI and keep feeding the sink — two at once.
+    jack = FakeJack()
+    m = make_mgr(jack)
+    m._registry = {"sfizz": SlotFake, "dexed": SlotFake}
+    a = Voice("A", "sfizz", "/sfz/a.sfz", "Piano")
+    b = Voice("B", "sfizz", "/sfz/b.sfz", "Piano")
+
+    m.load_voice(a)
+    m.load_voice(b)
+
+    assert ("effect_B:o1", "system:playback_1") in jack.connects
+    assert ("effect_A:o1", "system:playback_1") not in jack.connects
+    assert (KBD, "effect_A:control") not in jack.connects
+    assert (KBD, "effect_B:control") in jack.connects
+
+
+def test_new_ports_are_connected_before_the_old_are_dropped():
+    # No silent gap on a switch.
+    jack = FakeJack()
+    m = make_mgr(jack)
+    m._registry = {"sfizz": SlotFake}
+    m.load_voice(Voice("A", "sfizz", "/sfz/a.sfz", "Piano"))
+    EVENTS.clear()
+    m.load_voice(Voice("B", "sfizz", "/sfz/b.sfz", "Piano"))
+
+    connect_new = EVENTS.index(("connect", "effect_B:o1", "system:playback_1"))
+    drop_old = EVENTS.index(("disconnect", "effect_A:o1", "system:playback_1"))
+    assert connect_new < drop_old
+
+
+def test_a_switch_landing_on_the_same_slot_keeps_its_wiring():
+    # Re-selecting the active voice must not disconnect what it just wired.
+    jack = FakeJack()
+    m = make_mgr(jack)
+    m._registry = {"sfizz": SlotFake}
+    voice = Voice("A", "sfizz", "/sfz/a.sfz", "Piano")
+    m.load_voice(voice)
+    EVENTS.clear()
+    m.load_voice(voice)
+    assert not [e for e in EVENTS if e[0] == "disconnect"]
+    assert ("effect_A:o1", "system:playback_1") in jack.connects
+
+
+def test_changing_audio_card_drops_stale_slot_bookkeeping(tmp_path):
+    # mod-host cycles with jack, so every resident plugin is gone; reusing the
+    # remembered slots would wire a voice to nothing.
+    m = make_mgr(master=FakeMaster(ready=True))
+    m._audio_device_file = str(tmp_path / "dev")
+    m._ctx.systemctl = lambda argv: 0
+    m._slots.acquire(
+        Voice("A", "modhost", "", "", uri="urn:p", resident=True)
+    )
+    assert m._slots.loaded_instances() == [0]
+    m.set_audio_device("Headphones")
+    assert m._slots.loaded_instances() == []
+
+
+def test_rig_trim_stacks_on_the_active_voices_measured_trim():
+    # The by-ear nudge sits on top of the calibrated per-voice offset, and has
+    # to be audible while the slider moves.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano", gain_trim_db=-2.0)
+    m.load_voice(voice)
+    m.set_rig_trim(-3.5)
+    assert master.trim_db == -5.5
+
+
+def test_rig_trim_before_any_voice_is_loaded_does_not_crash():
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    m.set_rig_trim(-3.0)
+    assert master.trim_db == -3.0

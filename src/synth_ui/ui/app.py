@@ -31,6 +31,7 @@ from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
 from synth_ui.ui.screens.preset import PresetScreen
 from synth_ui.ui.screens.rigs import RigsScreen
 from synth_ui.ui.screens.splash import SplashScreen
+from synth_ui.ui.screens.text_entry import TextEntryScreen
 from synth_ui.ui.screens.usb import USBScreen
 from synth_ui.ui.screens.voice_picker import VoicePickerScreen
 from synth_ui.ui.utils import load_voices
@@ -103,6 +104,7 @@ class SynthUI:
             rigs=self._rigs.rigs,
             on_load_rig=self._load_rig,
             on_remove_rig=self._on_remove_rig,
+            on_edit_rig=self._show_rename_screen,
             on_new=self._show_voice_picker,
             on_edit=self._show_effects_screen,
             on_audio=self._show_audio_screen,
@@ -162,11 +164,24 @@ class SynthUI:
         self._home.header.name = rig.name
         self._home.header.error = not ok
 
-        presets = self._engine.list_presets()
-        if presets:
-            self._show_preset_screen(voice, presets)
-        else:
+        # Name it while you have the context for what it is. The rig is already
+        # created and loaded, so the instrument is playable during naming and
+        # cancelling just keeps the auto-name.
+        self._show_rename_screen(rig, title="Name rig")
+
+    def _show_rename_screen(self, rig: Rig, title: str = "Rename rig") -> None:
+        def done(name: str) -> None:
+            self._rigs.rename(rig, name)
+            self._home.header.name = rig.name
+            self._home.refresh(self._rigs.rigs)
             self._show_home()
+
+        self.screen = TextEntryScreen(
+            title=title,
+            initial=rig.name,
+            on_done=done,
+            on_cancel=self._show_home,
+        )
 
     def _on_remove_rig(self, rig: Rig) -> None:
         self._rigs.remove(rig.name)
@@ -179,6 +194,8 @@ class SynthUI:
         rig = self._home.active_rig
         if rig is None:
             return
+        if self._effects_screen is not None:
+            rig.trim_db = self._effects_screen.trim_slider.value
         rig.effects = [
             RigEffect(uri=e.uri) for e in self._engine.effects()
         ]
@@ -254,12 +271,15 @@ class SynthUI:
             self._audio_screen.header.name = "Audio switch failed"
 
     def _show_effects_screen(self) -> None:
+        rig = self._home.active_rig
         self._effects_screen = EffectsScreen(
             effects=self._engine.effects(),
             catalog=self._catalog,
             on_remove=self._on_remove_effect,
             on_add=self._show_effects_catalog_screen,
             on_back=self._leave_effects_screen,
+            on_trim_change=self._engine.set_rig_trim,
+            initial_trim=rig.trim_db if rig is not None else 0.0,
         )
         self.screen = self._effects_screen
 

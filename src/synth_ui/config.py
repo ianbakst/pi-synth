@@ -53,18 +53,38 @@ MAX_GAIN = 5.0
 # Every voice and every effect feeds through this, so it's where per-voice level
 # trim is applied and where a limiter protects the DAC.
 #
-# UNVERIFIED: these URIs and control symbols are inferred, not confirmed on
-# hardware. Check with `python3 -m synth_ui.tools.verify_voices --list` and
-# `--inspect <uri>`; a stage whose plugin is missing is skipped, so a wrong URI
-# costs level control, not sound. Calf's level_in is a linear multiplier, not
-# decibels — hence trim_unit.
+# Confirmed on hardware with `verify_voices --inspect` (Calf Limiter, calf.lv2).
+# All of Calf's gain controls are LINEAR multipliers, not decibels — hence unit.
+#
+# Gain staging: per-voice trim goes in *before* the limiter (level_in) so a hot
+# voice is actually limited, and the user's volume goes *after* it (level_out)
+# so turning down doesn't change how the limiter behaves. They're two different
+# jobs and Calf gives us a port for each.
 MASTER_LIMITER_URI = "http://calf.sourceforge.net/plugins/Limiter"
 MASTER_CHAIN: list[dict] = [
     {
         "uri": MASTER_LIMITER_URI,
-        "params": {"limit": 0.89},  # ~ -1 dBFS ceiling
-        "trim_symbol": "level_in",
-        "trim_unit": "linear",
+        "params": {
+            "limit": 0.89,       # ceiling, linear: ~ -1 dBFS
+            # OFF. Calf ships this ON: it auto-compensates gain so perceived
+            # loudness stays constant, which is exactly the automatic leveling
+            # we rejected — it would silently undo the per-voice trim and
+            # flatten playing dynamics.
+            "auto_level": 0,
+            # Lookahead, ms. Calf defaults to 5, which the plugin does NOT
+            # report as latency ("Has latency: no") — so it would quietly add
+            # ~5ms to key-to-sound on top of JACK's own buffer. 1ms is ample
+            # for a safety limiter that should rarely engage.
+            "attack": 1.0,
+            "oversampling": 1,   # 4x costs CPU on the RT path for no audible gain here
+        },
+        "trim_symbol": "level_in",     # pre-limiter: per-voice level match
+        "volume_symbol": "level_out",  # post-limiter: the user's volume
+        "unit": "linear",
+        # Port bounds (1/64 .. 64). Values outside these are invalid, so the
+        # silence floor has to clamp here rather than send 0.
+        "minimum": 0.015625,
+        "maximum": 64.0,
     },
 ]
 

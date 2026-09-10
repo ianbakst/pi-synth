@@ -3,8 +3,16 @@ fluidsynth
 fluid-soundfont-gm
 jackd2
 a2jmidid
+# Kept for its LV2 bundle (/usr/lib/lv2/b_synth), which IS the Hammond now.
+# The standalone binary it also installs is no longer run — setbfree.service
+# was retired when the organ moved into mod-host. Do not drop this package.
 setbfree
 alsa-utils
+# mDNS: publishes <TARGET_HOSTNAME>.local so the board is reachable by name.
+# Declared explicitly rather than assumed from the Lite base — 06-system-tuning
+# enables it, and `systemctl enable` on an uninstalled unit is a silent no-op,
+# which would leave the appliance findable only by IP.
+avahi-daemon
 build-essential
 cmake
 pkg-config
@@ -13,6 +21,17 @@ ca-certificates
 libsndfile1-dev
 libjack-jackd2-dev
 liblilv-dev
+# Build deps for the LV2 instruments in 02-audio-stack: setBfree's b_synth
+# (libltc/zita for the tonewheel + Leslie DSP) and Fluida (libfluidsynth).
+libfluidsynth-dev
+# Fluida bundles libxputty, its cairo/X11 GUI toolkit, and its top-level
+# Makefile builds that FIRST and aborts the whole build when it fails -- so the
+# DSP is never reached without these, even though we never load the UI. Build
+# deps only; nothing here runs on the appliance.
+libcairo2-dev
+libx11-dev
+libasound2-dev
+lv2-dev
 # lv2ls / lv2info: the UI reads lv2ls to grey out voices whose plugin isn't
 # installed, and `python3 -m synth_ui.tools.verify_voices --inspect` uses
 # lv2info to discover a plugin's control symbols + patch properties.

@@ -57,21 +57,37 @@ class MasterStage:
     uri: str
     # Control-port values applied once at load (e.g. the limiter's ceiling).
     params: dict[str, float] = field(default_factory=dict)
-    # If set, this stage's control receives volume + per-voice trim. Exactly one
-    # stage in the chain should declare it.
+    # Pre-limiter gain: the active voice's measured level offset. Putting trim
+    # before the limiter is what makes a hot voice actually get limited.
     trim_symbol: str = ""
-    # Whether trim_symbol is in decibels or is a linear multiplier. Calf's
-    # level_in, for instance, is linear — getting this wrong is a huge level
-    # error, so it's declared rather than assumed.
-    trim_unit: str = "db"
+    # Post-limiter gain: the user's volume. Kept separate so turning the volume
+    # down doesn't change how much the limiter is working. If a plugin only
+    # offers one gain control, leave this empty and volume is summed onto
+    # trim_symbol instead.
+    volume_symbol: str = ""
+    # Whether those controls take decibels or a linear multiplier. Calf's
+    # level_in/level_out are linear — getting this wrong is a huge level error,
+    # so it's declared rather than assumed.
+    unit: str = "db"
+    # Control-port bounds, when the port has them. A value outside the port's
+    # range isn't just clipped, it's invalid — Calf's gains bottom out at
+    # 1/64 (-36 dB), so "silence" has to clamp to that rather than send 0.
+    minimum: float | None = None
+    maximum: float | None = None
 
 
-def _to_control_value(db: float, unit: str) -> float:
-    if unit == "db":
-        return db
-    if db <= _MIN_DB:
-        return 0.0
-    return 10.0 ** (db / 20.0)
+def _to_control_value(db: float, stage: MasterStage) -> float:
+    if stage.unit == "db":
+        value = db
+    elif db <= _MIN_DB:
+        value = 0.0
+    else:
+        value = 10.0 ** (db / 20.0)
+    if stage.minimum is not None:
+        value = max(stage.minimum, value)
+    if stage.maximum is not None:
+        value = min(stage.maximum, value)
+    return value
 
 
 class MasterChain:
@@ -168,13 +184,25 @@ class MasterChain:
         return self._volume_db + self._trim_db
 
     def _apply_gain(self) -> None:
-        """Volume and trim are summed into the one control that exists — they're
-        the same physical gain, set by two different concerns."""
+        """Trim goes pre-limiter, volume post-limiter — see MasterStage. When a
+        stage only offers one gain control, the two collapse onto it."""
         for instance, stage in self._loaded:
             if not stage.trim_symbol:
                 continue
-            value = _to_control_value(self.level_db, stage.trim_unit)
-            self._mh.set_param(instance, stage.trim_symbol, str(value))
+            if stage.volume_symbol:
+                trim_db, volume_db = self._trim_db, self._volume_db
+            else:
+                trim_db, volume_db = self.level_db, None
+
+            self._mh.set_param(
+                instance, stage.trim_symbol, str(_to_control_value(trim_db, stage))
+            )
+            if volume_db is not None:
+                self._mh.set_param(
+                    instance,
+                    stage.volume_symbol,
+                    str(_to_control_value(volume_db, stage)),
+                )
 
     # ------------------------------------------------------------------
     # Internals

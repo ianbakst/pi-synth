@@ -54,7 +54,23 @@ done
 # the isolated audio cores (1,2,3); it just runs on core 0 alongside SSH and
 # the rest of the non-RT stack. If this ever proves to add real jitter, revert
 # by moving it back into the loop above.
-systemctl enable avahi-daemon.service 2>/dev/null || true
+#
+# NOT `|| true`, and the result is *asserted* rather than assumed. On a board
+# built with the previous version of this line, avahi-daemon ended up installed
+# but `inactive` and not enabled — the enable didn't take, the `2>/dev/null ||
+# true` swallowed any sign of it, and the appliance was reachable only by IP.
+# Checking is-enabled catches the case where the command reports success without
+# creating the wants/ symlink.
+systemctl enable avahi-daemon.service
+systemctl is-enabled avahi-daemon.service
+
+# Fail the build if the hostname didn't take: `<hostname>.local` is the only way
+# to find this box on a network, and a mismatch between /etc/hostname and the
+# 127.0.1.1 line in /etc/hosts breaks resolution in ways that are tedious to
+# diagnose on an appliance with no console login (getty@tty1 is masked below).
+test -s /etc/hostname
+grep -q "127.0.1.1[[:space:]]\+$(cat /etc/hostname)" /etc/hosts
+echo "hostname: $(cat /etc/hostname).local will be published over mDNS"
 
 # Don't block boot waiting for the network to come "online": the audio stack
 # doesn't need the network, this alone costs ~7s of boot, and it can hang boot
