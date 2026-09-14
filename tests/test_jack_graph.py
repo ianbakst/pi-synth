@@ -1,6 +1,8 @@
 """Tests for JackGraph — driven by a fake runner that emits canned jack_lsp
 output, so no JACK server is needed."""
 
+import pytest
+
 from synth_ui.clients.jack_graph import JackGraph
 
 # A realistic graph: fluidsynth (audio out -> DAC, midi in <- keyboard) running,
@@ -176,3 +178,48 @@ def test_empty_graph_off_pi_is_safe():
     assert g.keyboard_midi_sources() == []
     assert g.dac_sinks() == []
     assert g.connect("a", "b") is False
+
+
+# --- client matching: numbered mod-host instances must not collide ----------
+
+from synth_ui.clients.jack_graph import Port, _client_matches  # noqa: E402
+
+
+def _graph():
+    return JackGraph(runner=lambda cmd: (0, ""))
+
+
+def test_instance_9_does_not_match_the_limiter_at_90():
+    # The scratch slot is effect_9; the master-chain limiter is effect_90. A
+    # prefix match wired the keyboard into the limiter, and the instrument got
+    # no notes while the previous voice kept sounding.
+    snap = {
+        "effect_9:control": Port("effect_9:control", "midi", False),
+        "effect_90:events_in": Port("effect_90:events_in", "midi", False),
+    }
+    got = _graph().ports(client="effect_9", type="midi", is_output=False, snapshot=snap)
+    assert got == ["effect_9:control"]
+
+
+def test_instance_1_does_not_match_the_effects_rack():
+    snap = {
+        "effect_1:out": Port("effect_1:out", "audio", True),
+        "effect_10:out_l": Port("effect_10:out_l", "audio", True),
+        "effect_11:out_l": Port("effect_11:out_l", "audio", True),
+    }
+    got = _graph().ports(client="effect_1", type="audio", is_output=True, snapshot=snap)
+    assert got == ["effect_1:out"]
+
+
+@pytest.mark.parametrize("actual,wanted,expected", [
+    ("fluidsynth", "fluidsynth", True),
+    ("fluidsynth-01", "fluidsynth", True),   # JACK's second-instance suffix
+    ("FluidSynth", "fluidsynth", True),      # case-insensitive
+    ("effect_9", "effect_9", True),
+    ("effect_90", "effect_9", False),
+    ("effect_10", "effect_1", False),
+    ("system", "system", True),
+    ("systemd", "system", False),
+])
+def test_client_matching_stops_at_a_separator(actual, wanted, expected):
+    assert _client_matches(actual, wanted) is expected

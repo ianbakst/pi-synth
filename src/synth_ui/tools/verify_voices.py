@@ -107,17 +107,36 @@ def _bundle_dir(info: str) -> str | None:
     return m.group(1) if m else None
 
 
+_PREFIX_RE = re.compile(r"@prefix\s+([A-Za-z][\w.-]*):\s*<([^>]+)>\s*\.")
+# A turtle resource is either <a full URI> or a prefix:localName.
+_TERM = r"(?:<[^>]+>|[A-Za-z][\w.-]*:[\w.-]+)"
+_WRITABLE_RE = re.compile(rf"patch:writable\s+((?:{_TERM}\s*,?\s*)+)")
+_TERM_RE = re.compile(_TERM)
+
+
+def _expand(term: str, prefixes: dict[str, str]) -> str:
+    """Turn a turtle term into a full URI."""
+    if term.startswith("<"):
+        return term[1:-1]
+    pfx, _, local = term.partition(":")
+    return prefixes.get(pfx, pfx + ":") + local
+
+
 def _patch_properties(bundle: str) -> list[tuple[str, str]]:
     """(property URI, label) for every patch:writable the bundle declares.
 
     This is the question lv2info can't answer and the one that matters most: a
-    plugin that loads an instrument *file* does it through an atom-based
-    patch property, not a control port — `param_set` silently no-ops on those.
-    Finding sfizz's `sfzfile` this way is what made sfizz audible at all, so
-    the search is codified here rather than repeated by hand per plugin.
+    plugin that loads an instrument *file* does it through an atom-based patch
+    property, not a control port — `param_set` silently no-ops on those.
+
+    Terms are matched in BOTH turtle spellings. Only handling `<full URIs>`
+    silently reported "no properties" for Fluida, whose entire parameter set
+    (including the soundfont path) is written as `fluida:soundfont` against an
+    `@prefix` — which is the more common style, so the omission hid the very
+    thing this function exists to find.
 
     Deliberately a text scan, not an RDF parse: it needs no new dependency on
-    the board and a property URI is unambiguous in the raw turtle.
+    the board, and these two spellings cover what plugin bundles actually use.
     """
     found: dict[str, str] = {}
     try:
@@ -132,27 +151,29 @@ def _patch_properties(bundle: str) -> list[tuple[str, str]]:
                 text = f.read()
         except OSError:
             continue
-        # `patch:writable <a> , <b> ;` — match the bracketed URIs directly.
-        # Don't try to delimit on "." : turtle statements end with a dot but
-        # URIs are full of them ("sfztools.github.io"), which silently
-        # truncated every property to nothing.
-        for match in re.finditer(r"patch:writable\s+((?:<[^>]+>\s*,?\s*)+)", text):
-            for uri in re.findall(r"<([^>]+)>", match.group(1)):
+
+        prefixes = dict(_PREFIX_RE.findall(text))
+        for match in _WRITABLE_RE.finditer(text):
+            for term in _TERM_RE.findall(match.group(0).split(None, 1)[1]):
+                uri = _expand(term, prefixes)
                 found.setdefault(uri, "")
-        # Labels sit on the parameter's own declaration (`<uri> a lv2:Parameter`),
-        # so anchor there. Anchoring on any occurrence instead picks up the
-        # patch:writable *reference* line, where a neighbouring property's label
-        # is the next thing in the window — every property ends up labelled with
-        # the first one's name.
-        for uri in list(found):
-            decl = re.search(rf"<{re.escape(uri)}>\s+a\s+lv2:Parameter", text)
-            if not decl:
-                continue
-            label = re.search(
-                r'rdfs:label\s+"([^"]+)"', text[decl.start() : decl.start() + 400]
-            )
-            if label:
-                found[uri] = label.group(1)
+                # The label (and the file-type hint) live on the parameter's own
+                # declaration, keyed by the term as written.
+                decl = re.search(
+                    rf"{re.escape(term)}\s+a\s+lv2:Parameter", text
+                )
+                if not decl:
+                    continue
+                window = text[decl.start() : decl.start() + 400]
+                label = re.search(r'rdfs:label\s+"([^"]+)"', window)
+                ftype = re.search(r'mod:fileTypes\s+"([^"]+)"', window)
+                if label:
+                    found[uri] = label.group(1)
+                if ftype:
+                    # Mark file-taking properties: this is the one a voice's
+                    # `path` goes through, and it's what makes a soundfont or
+                    # sample library reachable at all.
+                    found[uri] = f"{found[uri] or 'file'} [file: {ftype.group(1)}]"
     return sorted(found.items())
 
 

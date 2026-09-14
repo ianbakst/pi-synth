@@ -88,3 +88,59 @@ def test_only_input_control_ports_are_listed():
     # Output controls are meters and LEDs — nothing a voice can set — and audio
     # ports aren't parameters at all.
     assert _control_ports(LV2INFO) == [("level_in", "Input Gain")]
+
+
+# --- prefixed turtle names (the common style) -------------------------------
+
+FLUIDA_TTL = """
+@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix atom:  <http://lv2plug.in/ns/ext/atom#> .
+@prefix patch: <http://lv2plug.in/ns/ext/patch#> .
+@prefix fluida:  <https://github.com/brummer10/Fluida.lv2#>  .
+@prefix mod: <http://moddevices.com/ns/mod#> .
+
+fluida:soundfont
+    a lv2:Parameter ;
+    mod:fileTypes "sf2" ;
+    rdfs:label "soundfont" ;
+    rdfs:range atom:Path .
+
+fluida:gain
+    a lv2:Parameter ;
+    rdfs:label "Gain" ;
+    rdfs:range atom:Float .
+
+<https://github.com/brummer10/Fluida.lv2>
+    a lv2:Plugin ;
+    patch:writable fluida:soundfont ,
+                fluida:gain ;
+    patch:readable fluida:gain .
+"""
+
+
+def test_prefixed_names_are_expanded_against_at_prefix(tmp_path):
+    # Matching only <full URIs> reported "no properties" for a plugin whose
+    # entire parameter set — the soundfont path included — is written as
+    # `fluida:soundfont`. That hid the one thing this function exists to find.
+    props = dict(_patch_properties(bundle(tmp_path, FLUIDA_TTL, "Fluida.ttl")))
+    assert "https://github.com/brummer10/Fluida.lv2#soundfont" in props
+    assert "https://github.com/brummer10/Fluida.lv2#gain" in props
+
+
+def test_file_taking_properties_are_marked(tmp_path):
+    # Which property a voice's `path` goes through is the whole question; the
+    # mod:fileTypes hint answers it without reading the turtle by hand.
+    props = dict(_patch_properties(bundle(tmp_path, FLUIDA_TTL, "Fluida.ttl")))
+    assert "[file: sf2]" in props["https://github.com/brummer10/Fluida.lv2#soundfont"]
+    assert "file" not in props["https://github.com/brummer10/Fluida.lv2#gain"]
+
+
+def test_readable_only_properties_are_not_listed(tmp_path):
+    # patch:readable without patch:writable can't be set, so it isn't a `param`.
+    ttl = """
+@prefix p: <urn:p#> .
+p:ro a lv2:Parameter ; rdfs:label "Read Only" .
+<urn:plug> a lv2:Plugin ; patch:readable p:ro .
+"""
+    assert _patch_properties(bundle(tmp_path, ttl)) == []

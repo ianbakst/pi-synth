@@ -23,12 +23,15 @@ RIGS_FILE = os.path.expanduser("~/.synth-rigs.json")
 # start-jack.sh reads it to pick JACK's device. Absent = auto-detect (default).
 AUDIO_DEVICE_FILE = os.path.expanduser("~/.synth-audio-device")
 
-# Voice loaded on a fresh boot when no ~/.synth-state exists yet. Must match a
-# `name` in voices.json. The FluidSynth "General MIDI" voice is the safe default:
-# its default.sf2 is guaranteed present in the image and (with the service's
-# audio.jack.autoconnect) its audio reaches the DAC — so the unit plays on boot
-# with no touchscreen interaction.
-DEFAULT_VOICE = "General MIDI"
+# Voice a fresh card's first rig is built on, so the unit plays on boot with no
+# touchscreen interaction. Must be a voice the IMAGE guarantees — not one that
+# depends on anything done after flashing:
+#   - not a split GM font: splitting runs on the board, after first boot
+#   - not a sample library: none ship in the image
+# mda EPiano comes from mda-lv2 (00-packages), needs no instrument file, and is
+# resident. It was "General MIDI" on fluidsynth until those hand-written GM
+# voices were replaced by discovered, split fonts.
+DEFAULT_VOICE = "Rhodes EP"
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 IMAGES_DIR = os.path.join(ASSETS_DIR, "images")
 
@@ -46,8 +49,12 @@ FRAMEBUFFER = "/dev/fb0"
 TOUCH_DEVICE = "/dev/input/event4"
 
 # --- Gain ---
-DEFAULT_GAIN = 2.0
+# Volume slider range. Its top is 0 dB on the master chain; see
+# engine_manager._gain_to_db for the taper.
 MAX_GAIN = 5.0
+# Boot volume: ~-6 dB, leaving headroom. Was 2.0, which under the old mapping
+# meant +6 dB post-limiter — clipping from the first note.
+DEFAULT_GAIN = 3.5
 
 # --- Master chain (permanent tail of the signal path; see clients/master_chain.py) ---
 # Every voice and every effect feeds through this, so it's where per-voice level
@@ -88,9 +95,6 @@ MASTER_CHAIN: list[dict] = [
     },
 ]
 
-# Volume slider position (linear, 0..MAX_GAIN) that means "unity" on the master
-# chain. The slider is converted to dB around this point.
-UNITY_GAIN = 1.0
 
 # --- Colors ---
 BG = (20, 20, 25)

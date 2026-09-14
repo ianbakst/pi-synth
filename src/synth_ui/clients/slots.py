@@ -118,8 +118,16 @@ class InstrumentSlots:
             if instance not in self._slots:
                 return instance
 
-        # All resident slots taken: evict the least recently used.
-        victim = self._lru[0]
+        # All resident slots taken: evict the least recently used *resident*
+        # one. Plain _lru[0] could return the scratch slot, which is not a
+        # resident slot: a resident voice placed there is evicted by the very
+        # next sample-library voice, so a working voice silently stops loading.
+        victim = next(
+            (i for i in self._lru if i != _SCRATCH_SLOT and i in self._slots), None
+        )
+        if victim is None:
+            logger.error("no resident slot available to evict")
+            return None
         logger.info(
             "instrument slots full; evicting %s from %d",
             self._slots[victim].voice_name,
@@ -136,6 +144,13 @@ class InstrumentSlots:
             self._lru.remove(instance)
 
     def _load(self, instance: int, voice: Voice, spec: PluginSpec) -> bool:
+        # Clear the slot first. mod-host refuses `add` on an instance it already
+        # holds, and our bookkeeping can disagree with reality — mod-host
+        # restarting (it is PartOf=jack.service, and it can be OOM-killed) leaves
+        # us believing plugins are loaded that aren't, and believing instances
+        # are free that aren't. Removing is idempotent and harmless on an empty
+        # slot, so it costs nothing and makes a desync self-healing.
+        self._mh.remove_plugin(instance, missing_ok=True)
         if not self._mh.load_plugin(spec.uri, instance):
             logger.error("mod-host failed to load %s at %d", spec.uri, instance)
             return False

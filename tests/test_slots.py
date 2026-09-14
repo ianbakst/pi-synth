@@ -68,7 +68,9 @@ def test_non_resident_voices_share_the_scratch_slot():
     slots = InstrumentSlots(mh)
     assert slots.acquire(sampler("Piano A", "/sfz/a.sfz")) == 9
     assert slots.acquire(sampler("Piano B", "/sfz/b.sfz")) == 9
-    mh.remove_plugin.assert_called_once_with(9)
+    # Only ever one of them held at a time.
+    assert slots.loaded_instances() == [9]
+    assert mh.remove_plugin.call_args_list[-1].args == (9,)
 
 
 def test_a_sampler_never_evicts_the_resident_set():
@@ -102,7 +104,9 @@ def test_full_resident_set_evicts_least_recently_used():
     slots.acquire(voices[0])          # touch 0 so it isn't the victim
     mh.reset_mock()
     slots.acquire(synth("New", "urn:plugin:new"))
-    mh.remove_plugin.assert_called_once_with(1)   # V1 was least recently used
+    # V1 was least recently used, so its slot is the one reused.
+    assert slots.instance_of("V1") is None
+    assert slots.instance_of("New") == 1
 
 
 def test_a_voice_with_no_uri_is_refused():
@@ -173,4 +177,31 @@ def test_clear_unloads_everything():
     slots.acquire(synth("B", JX10_URI))
     slots.clear()
     assert slots.loaded_instances() == []
-    assert mh.remove_plugin.call_count == 2
+    removed = {c.args[0] for c in mh.remove_plugin.call_args_list}
+    assert {0, 1} <= removed
+
+
+def test_eviction_never_takes_the_scratch_slot():
+    # The scratch slot is not a resident slot. Evicting it would put a resident
+    # voice at 9, where the next sample-library voice immediately drops it —
+    # a voice that worked a minute ago silently stops loading.
+    mh = mh_ok()
+    slots = InstrumentSlots(mh)
+    slots.acquire(sampler("Big Piano", "/sfz/a.sfz"))          # takes slot 9 first
+    for i in range(9):
+        slots.acquire(synth(f"V{i}", f"urn:plugin:{i}"))       # fills 0-8
+
+    slots.acquire(synth("New", "urn:plugin:new"))
+    assert slots.instance_of("New") != 9
+    assert slots.instance_of("New") in range(0, 9)
+
+
+def test_loading_clears_the_slot_first_so_a_desync_self_heals():
+    # mod-host refuses `add` on an instance it already holds. If it restarted
+    # under us our bookkeeping is stale, and every subsequent load would fail
+    # on a slot we believe is free.
+    mh = mh_ok()
+    slots = InstrumentSlots(mh)
+    slots.acquire(synth("A", EPIANO_URI))
+    order = [c[0] for c in mh.method_calls if c[0] in ("remove_plugin", "load_plugin")]
+    assert order[:2] == ["remove_plugin", "load_plugin"]

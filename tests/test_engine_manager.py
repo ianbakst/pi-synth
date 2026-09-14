@@ -30,13 +30,20 @@ KBD = "a2j:KBD (capture): MIDI 1"
 
 
 class FakeJack:
-    def __init__(self, ready=True, ports=None):
+    def __init__(self, ready=True, ports=None, stale=None):
         self.ready = ready
         self.connects: list = []
         self._ports = ports or {}
+        self.stale: list = list(stale or [])
 
     def wait_for(self, *, client, type=None, is_output=None, timeout=0):
         return self.ready
+
+    def snapshot(self):
+        # Port names the manager can see; start() reads this to find stale
+        # mod-host instances left over from a previous UI session.
+        names = {p for ports in self._ports.values() for p in ports}
+        return dict.fromkeys(self.stale + sorted(names))
 
     def keyboard_midi_sources(self, snapshot=None):
         return [KBD]
@@ -414,10 +421,10 @@ def test_volume_reaches_every_voice_not_just_fluidsynth():
     master = FakeMaster(ready=True)
     m = make_mgr(master=master)
     m.load_voice(SFIZZ)
-    m.set_gain(1.0)
-    assert master.volume_db == 0.0     # UNITY_GAIN -> 0 dB
-    m.set_gain(0.5)
-    assert abs(master.volume_db - -6.02) < 0.05
+    m.set_gain(5.0)
+    assert master.volume_db == 0.0     # top of the slider is full scale
+    m.set_gain(2.5)
+    assert abs(master.volume_db - -12.04) < 0.05
     m.set_gain(0.0)
     assert master.volume_db == -60.0   # silence floor, not a tiny gain
 
@@ -576,3 +583,52 @@ def test_rig_trim_before_any_voice_is_loaded_does_not_crash():
     m = make_mgr(master=master)
     m.set_rig_trim(-3.0)
     assert master.trim_db == -3.0
+
+
+# --- volume never exceeds full scale -----------------------------------------
+
+def test_the_volume_slider_never_goes_above_full_scale():
+    # Volume sits AFTER the limiter, so a positive dB value clips at the DAC
+    # where the limiter can't help. The old mapping put 0 dB at 20% of the
+    # slider, making the top four-fifths all clipping.
+    from synth_ui.clients.engine_manager import _gain_to_db
+    from synth_ui.config import MAX_GAIN
+
+    for pct in range(0, 101, 5):
+        assert _gain_to_db(MAX_GAIN * pct / 100) <= 0.0
+
+
+def test_the_slider_spreads_audible_change_across_its_travel():
+    # A usable fader has meaningful attenuation across its range, not crammed
+    # into the bottom fifth.
+    from synth_ui.clients.engine_manager import _gain_to_db
+    from synth_ui.config import MAX_GAIN
+
+    assert -15 < _gain_to_db(MAX_GAIN * 0.5) < -9     # halfway is clearly quieter
+    assert _gain_to_db(MAX_GAIN * 0.9) > -3            # near the top is near full
+
+
+def test_the_boot_volume_leaves_headroom():
+    from synth_ui.clients.engine_manager import _gain_to_db
+    from synth_ui.config import DEFAULT_GAIN
+
+    assert -12 < _gain_to_db(DEFAULT_GAIN) < 0
+
+
+# --- a UI session starts from a clean mod-host --------------------------------
+
+def test_start_clears_plugins_left_by_a_previous_ui_session():
+    # mod-host outlives a UI restart, keeping the old session's plugins and
+    # their JACK connections. A stale instrument -> DAC edge bypassed the
+    # volume stage; a stale limiter at 90 made this session's add refused.
+    jack = FakeJack(stale=["effect_0:outL", "effect_0:control", "effect_90:out_l"])
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    m.start()
+    removed = sorted({c.args[0] for c in m._mod_host.remove_plugin.call_args_list})
+    assert removed == [0, 90]
+
+
+def test_start_on_a_fresh_mod_host_removes_nothing():
+    m = make_mgr(FakeJack(), master=FakeMaster(ready=True))
+    m.start()
+    m._mod_host.remove_plugin.assert_not_called()

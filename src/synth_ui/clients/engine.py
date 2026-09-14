@@ -34,7 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from synth_ui.clients.jack_graph import JackGraph
-from synth_ui.clients.lv2 import GENERIC_ENGINE
+from synth_ui.clients.lv2 import MODHOST_ENGINES
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.synth_client import FluidSynthController
@@ -303,10 +303,11 @@ class ModHostEngine(Engine):
 ENGINE_REGISTRY: dict[str, type[Engine]] = {
     "fluidsynth": FluidSynthEngine,
     "pianoteq": PianoteqEngine,
-    # Any LV2 instrument: the voice carries the URI. Adding one is a manifest
-    # edit, not a code change.
-    GENERIC_ENGINE: ModHostEngine,
-    # Legacy engine names for the two plugins that predate `modhost`.
-    "sfizz": ModHostEngine,
-    "dexed": ModHostEngine,
+    # Every name that resolves to an LV2 plugin — `modhost` plus each alias in
+    # lv2.PLUGIN_SPECS (sfizz, dexed, fluida) — is played by mod-host. Derived
+    # from the same set voice validation uses, rather than listed by hand: a
+    # hand-kept list omitted `fluida`, so soundfont voices validated as usable,
+    # then failed to load with "unknown engine" while the previous voice kept
+    # sounding.
+    **dict.fromkeys(MODHOST_ENGINES, ModHostEngine),
 }

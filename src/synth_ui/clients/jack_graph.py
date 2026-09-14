@@ -65,6 +65,26 @@ class Port:
         return self.name.split(":", 1)[0]
 
 
+def _client_matches(actual: str, wanted: str) -> bool:
+    """Does a port's client name match the one asked for?
+
+    Equal, or `wanted` followed by a separator — so "fluidsynth" still matches
+    "fluidsynth-01" (JACK's suffix for a second instance), but "effect_9" does
+    NOT match "effect_90".
+
+    A plain prefix match did, and mod-host names every plugin instance
+    "effect_<n>": the scratch slot 9 matched the master-chain limiter at 90, and
+    slot 1 matched the effects rack at 10+. With ports sorted, the limiter's
+    "effect_90:events_in" sorts ahead of "effect_9:control" ('0' < ':'), so the
+    keyboard got wired into the limiter instead of the instrument — which played
+    nothing, while the previous voice kept sounding.
+    """
+    actual, wanted = actual.lower(), wanted.lower()
+    if actual == wanted:
+        return True
+    return actual.startswith(wanted) and not actual[len(wanted)].isalnum()
+
+
 class JackGraph:
     def __init__(self, runner: Runner | None = None):
         self._run: Runner = runner or _subprocess_runner
@@ -120,14 +140,15 @@ class JackGraph:
     ) -> list[str]:
         """Port names matching the given filters.
 
-        `client` matches case-insensitively as a prefix of the client segment
-        (so "fluidsynth" also matches "fluidsynth-01"). `contains` matches a
+        `client` matches case-insensitively, either exactly or as a prefix
+        ending at a separator — "fluidsynth" matches "fluidsynth-01", but
+        "effect_9" never matches "effect_90" (see _client_matches). `contains` matches a
         substring of the full port name (case-insensitive).
         """
         snap = snapshot if snapshot is not None else self.snapshot()
         out: list[str] = []
         for name, p in snap.items():
-            if client is not None and not p.client.lower().startswith(client.lower()):
+            if client is not None and not _client_matches(p.client, client):
                 continue
             if type is not None and p.type != type:
                 continue

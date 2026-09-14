@@ -60,7 +60,17 @@ There are THREE independent components that must run as separate processes:
 - **Display:** 3.5" touchscreen, 800×480, ft5x06 controller at `/dev/input/event4`
 - **MIDI:** two inputs, both bridged into JACK (see docs/engine-architecture.md,
   "MIDI ingress")
-  - USB MIDI keyboard, ALSA sequencer client (number varies) → `a2jmidid`
+  - USB MIDI keyboard, ALSA sequencer client (number varies) → `a2jmidid`.
+    **The Roland FP-10 must have its Bluetooth turned OFF** (hold `[FUNCTION]`,
+    press the Bluetooth key — see its reference manual's key chart). With
+    Bluetooth on, the piano batches its USB MIDI into clumps of ~14 messages
+    arriving every ~2 s, which presents as seconds of latency and notes
+    vanishing during fast passages. It is the piano's firmware, not this Pi:
+    measured with `tools/midi_latency.py` against a Pico on the same USB
+    controller, which delivered 1.0 notes per read and 500 of 500 notes at 25
+    notes/sec. See hardware/midi-tester/README.md.
+    Beware: the FP-10's Memory Backup does **not** list Bluetooth among the
+    settings it persists, so check the setting survives a power cycle.
   - 5-pin DIN **MIDI IN** on UART0 RX, GPIO15 (pin 10), 31250 baud → `ttymidi`.
     IN only; GPIO14/TXD0 is unused. Needs `dtparam=uart0=on` on CM5 (on Pi 4
     `dtoverlay=disable-bt` does it), and the kernel serial console must be kept

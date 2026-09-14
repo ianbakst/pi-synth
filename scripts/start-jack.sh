@@ -17,6 +17,29 @@
 set -u
 
 DEVICE_FILE="${SYNTH_AUDIO_DEVICE_FILE:-${HOME:-/home/synth}/.synth-audio-device}"
+# MIDI bridge. `raw` uses jackd's own alsa_rawmidi driver, which reads the
+# hardware MIDI device directly and publishes physical JACK ports for it.
+#
+# This replaces a2jmidid, which went through the ALSA *sequencer* and
+# re-timestamped events onto JACK's clock. Measured on hardware: `aseqdump` saw
+# key presses instantly while jack_midi_dump on a2jmidid's port saw them a
+# variable delay later — up to seconds — with no xruns and the sound following
+# the moment the event landed. The delay was entirely in that hand-off. Reading
+# rawmidi skips the sequencer and the re-timestamping altogether.
+#
+# Currently `none`: a2jmidid is back in the path. `raw` was tried against a
+# variable MIDI delay and made no difference — the delay was later measured with
+# `aseqdump` on a fully idle machine, every service stopped, and is upstream of
+# JACK entirely (USB, the MIDI driver, or the keyboard). Left here because one
+# bridge inside jackd is still the tidier end state once that is resolved.
+#
+# `raw` also takes the MIDI device exclusively, which locks the ALSA sequencer
+# out of it: `aseqdump` and `aconnect` cannot see the keyboard while it is set.
+#
+# a2jmidid MUST NOT run alongside this: it would publish the same keyboard a
+# second time, and EngineManager wires every physical MIDI source to the active
+# instrument — so every note would sound twice.
+MIDI_DRIVER="${SYNTH_JACK_MIDI:-none}"
 RATE="${SYNTH_JACK_RATE:-48000}"
 PERIOD="${SYNTH_JACK_PERIOD:-128}"
 NPERIODS="${SYNTH_JACK_NPERIODS:-2}"
@@ -68,7 +91,8 @@ fi
 
 if [ -n "$DEVICE" ]; then
     echo "start-jack: using hw:$DEVICE" >&2
-    exec $JACK -d alsa -d "hw:$DEVICE" -r "$RATE" -p "$PERIOD" -n "$NPERIODS"
+    exec $JACK -d alsa -d "hw:$DEVICE" -r "$RATE" -p "$PERIOD" -n "$NPERIODS" \
+        -X "$MIDI_DRIVER"
 else
     echo "start-jack: no ALSA playback card found — starting on the dummy backend" >&2
     exec $JACK -d dummy -r "$RATE" -p "$PERIOD"

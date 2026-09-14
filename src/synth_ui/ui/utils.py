@@ -2,7 +2,8 @@ import getpass
 import glob
 import os
 
-from synth_ui.clients.lv2 import LV2World
+from synth_ui.clients.lv2 import LV2World, spec_for
+from synth_ui.clients.soundfont import discover
 from synth_ui.clients.voice import Voice, annotate
 from synth_ui.clients.voice import read_voices_manifest as _read_manifest
 
@@ -19,23 +20,46 @@ def scan_soundfonts(directory: str) -> list[str]:
     return fonts
 
 
+def soundfont_engine() -> str:
+    """What plays a .sf2 here: the mod-host plugin if it's installed, otherwise
+    the fluidsynth process engine.
+
+    Decided at runtime rather than baked into the manifest so one library works
+    on a board with the plugin and a board without — the difference is which
+    engine, never which voices exist.
+    """
+    spec = spec_for("fluida")
+    return "fluida" if spec and _lv2.has(spec.uri) else "fluidsynth"
+
+
 def load_voices(manifest_path: str, soundfont_dir: str) -> list[Voice]:
-    """Return voices from manifest, falling back to soundfont directory scan.
+    """The instrument library: curated manifest entries plus every SoundFont in
+    the soundfont directory.
+
+    The directory is a manifest in its own right — dropping a .sf2 in adds a
+    voice, deleting it removes one, which is how a split GM set (128 files) and
+    USB-imported fonts get used without hand-writing JSON for each. Manifest
+    entries win on conflict, since those carry the settings a bare file can't:
+    level trim, presets, params.
 
     Every voice is annotated with why it can't be used here (missing file,
-    plugin never built), so the UI can show that up front instead of the user
+    plugin never built), so the UI shows that up front instead of the user
     discovering it by tapping — see clients/voice.py validate().
     """
     voices = _read_manifest(manifest_path)
-    if not voices:
-        # Fallback: treat every SF2/SF3 in soundfont_dir as a FluidSynth voice
-        for path in scan_soundfonts(soundfont_dir):
-            voices.append(Voice(
-                name=display_name(path),
-                engine="fluidsynth",
-                path=path,
-                category="General MIDI",
-            ))
+    claimed = {os.path.realpath(v.path) for v in voices if v.path}
+    names = {v.name for v in voices}
+
+    for voice in discover(soundfont_dir, engine=soundfont_engine()):
+        if os.path.realpath(voice.path) in claimed:
+            continue
+        # Rigs reference a voice by name, so a collision would make one of them
+        # unreachable. Disambiguate rather than silently dropping it.
+        if voice.name in names:
+            voice.name = f"{voice.name} ({os.path.basename(voice.path)})"
+        names.add(voice.name)
+        voices.append(voice)
+
     return annotate(voices, has_uri=_lv2.has)
 
 

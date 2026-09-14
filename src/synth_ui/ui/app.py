@@ -99,6 +99,8 @@ class SynthUI:
         # and make no sound.
         self._rigs = RigLibrary.load(RIGS_FILE)
         self._rigs.bootstrap(DEFAULT_VOICE)
+        self._library: dict[str, Voice] = {}
+        self._reload_library()
 
         self._home = RigsScreen(
             rigs=self._rigs.rigs,
@@ -124,11 +126,25 @@ class SynthUI:
     # Rigs
     # ------------------------------------------------------------------
 
+    def _reload_library(self) -> None:
+        """Rebuild the voice library from the manifest and the soundfont folder.
+
+        Deliberately NOT done on lookup. `_voice_for` is reached from
+        RigList.draw — once per visible rig, every frame — and building the
+        library scans every soundfont on the SD card and reads its header. Doing
+        that per lookup meant re-reading the whole library over a hundred times
+        a second: 66% CPU from a 30 fps touchscreen loop, and heavy SD I/O on
+        core 0, which also carries the audio interrupt.
+
+        So it's built once, and rebuilt only when the library can actually have
+        changed: opening the voice picker, and after a USB import.
+        """
+        self._library = {
+            v.name: v for v in load_voices(VOICES_MANIFEST, SOUNDFONT_DIR)
+        }
+
     def _voice_for(self, name: str) -> Voice | None:
-        return next(
-            (v for v in load_voices(VOICES_MANIFEST, SOUNDFONT_DIR) if v.name == name),
-            None,
-        )
+        return self._library.get(name)
 
     def _rig_unavailable(self, rig: Rig) -> str:
         """Why this rig can't be loaded here — surfaced on the row rather than
@@ -146,6 +162,7 @@ class SynthUI:
         return self._engine.load_rig(rig, voice)
 
     def _show_voice_picker(self) -> None:
+        self._reload_library()   # pick up fonts added since startup
         self._picker = VoicePickerScreen(
             on_pick=self._on_voice_picked,
             on_back=self._show_home,
@@ -236,8 +253,8 @@ class SynthUI:
         )
 
     def _on_usb_copy_complete(self) -> None:
-        # USB import adds soundfonts to the catalog, so it's the picker that
-        # needs re-reading, not the rig list.
+        # USB import adds soundfonts to the catalog.
+        self._reload_library()
         if self._picker is not None:
             self._picker.refresh()
 

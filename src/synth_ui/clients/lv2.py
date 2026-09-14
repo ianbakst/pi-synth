@@ -49,12 +49,14 @@ PLUGIN_SPECS: dict[str, PluginSpec] = {
     # unconfirmed. Empty file_property => the plugin loads but no cartridge is
     # set. `verify-voices --inspect` on the board is how to fill this in.
     "dexed": PluginSpec(uri="https://asb2m10.github.io/dexed"),
-    # SoundFont player, replacing the fluidsynth process + its TCP shell.
-    # TODO: file_property unconfirmed — run `verify_voices --inspect` on the
-    # board once Fluida is built. Without it the plugin loads but plays no
-    # soundfont, which validation reports as "no file property for this plugin"
-    # rather than failing silently.
-    "fluida": PluginSpec(uri="https://github.com/brummer10/Fluida.lv2"),
+    # SoundFont player. Confirmed on hardware from its bundle turtle: the
+    # soundfont is a patch:writable atom:Path (mod:fileTypes "sf2").
+    # NOTE: Fluida exposes no bank/program property — instrument selection
+    # inside the font is MIDI Program Change only. See docs/voice-library.md.
+    "fluida": PluginSpec(
+        uri="https://github.com/brummer10/Fluida.lv2",
+        file_property="https://github.com/brummer10/Fluida.lv2#soundfont",
+    ),
 }
 
 # The generic engine name for "any LV2 instrument, URI given by the voice".

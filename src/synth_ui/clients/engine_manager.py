@@ -17,6 +17,7 @@ select_preset / set_gain / is_connected).
 
 import logging
 import math
+import re
 import time
 
 from synth_ui.clients.audio_devices import AudioDevices, Card
@@ -36,7 +37,7 @@ from synth_ui.clients.rig import Rig, plan
 from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.synth_client import FluidSynthController, Preset
 from synth_ui.clients.voice import Voice
-from synth_ui.config import AUDIO_DEVICE_FILE, MASTER_CHAIN, UNITY_GAIN
+from synth_ui.config import AUDIO_DEVICE_FILE, MASTER_CHAIN, MAX_GAIN
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,23 @@ _SILENCE_DB = -60.0
 
 
 def _gain_to_db(gain: float) -> float:
-    """Slider position (linear, 0..MAX_GAIN) -> dB on the master chain, with
-    UNITY_GAIN as 0 dB."""
-    if gain <= 0:
+    """Volume slider position (0..MAX_GAIN) -> dB on the master chain.
+
+    The top of the slider is 0 dB, never above. The volume stage sits AFTER the
+    limiter, so a positive value isn't "louder" — it's past full scale, clipping
+    at the DAC where the limiter can't help. The old mapping put unity at 20% of
+    the slider's travel, so the top four-fifths were all clipping (moving it
+    changed nothing audible) and every useful setting was crammed into the
+    bottom fifth.
+
+    Square-law taper (40*log10 rather than 20*log10): hearing is roughly
+    logarithmic, so a linear-in-amplitude slider bunches all the audible change
+    at the bottom. This spreads it: 50% is -12 dB, 25% is -24 dB.
+    """
+    ratio = max(0.0, min(1.0, gain / MAX_GAIN))
+    if ratio <= 0:
         return _SILENCE_DB
-    return max(_SILENCE_DB, 20.0 * math.log10(gain / UNITY_GAIN))
+    return max(_SILENCE_DB, 40.0 * math.log10(ratio))
 
 
 class EngineManager:
@@ -134,6 +147,7 @@ class EngineManager:
         routed into it no matter which happens first."""
         self._started = True
         self._ctx.systemctl(["sudo", "systemctl", "start", _MOD_HOST_UNIT])
+        self._clear_host()
         # A freshly-started mod-host accepts TCP before it has finished scanning
         # the LV2 world, so the first plugin adds can bounce. Retry the load
         # itself, not just the connect — same race ModHostEngine handles.
@@ -145,6 +159,36 @@ class EngineManager:
                 logger.error("master chain did not come up; routing direct to DAC")
                 return False
             time.sleep(0.2)
+
+    def _clear_host(self) -> None:
+        """Remove every plugin mod-host is holding, so this session starts clean.
+
+        mod-host outlives the UI: `deploy.sh` and any UI crash restart synth-ui
+        but leave mod-host running, still holding the last session's plugins
+        *and their JACK connections*, none of which this session knows about.
+        That surfaced two ways:
+
+          - a stale instrument -> DAC connection from a session where the master
+            chain failed kept feeding the DAC directly, bypassing the volume
+            stage — so the slider "didn't work" on exactly that instrument;
+          - the previous session's limiter still sitting at instance 90, so this
+            session's `add` at 90 is refused and the master chain silently
+            degrades to direct-to-DAC.
+
+        Removing a plugin destroys its JACK client, which drops every
+        connection it had. What's loaded is read from the JACK graph (mod-host
+        registers each instance as client `effect_<n>`), so only instances that
+        actually exist are touched.
+        """
+        instances = sorted({
+            int(m.group(1))
+            for name in self._jack.snapshot()
+            if (m := re.match(r"effect_(\d+):", name))
+        })
+        for instance in instances:
+            self._mod_host.remove_plugin(instance, missing_ok=True)
+        if instances:
+            logger.info("cleared %d stale mod-host instances", len(instances))
 
     def load_voice(self, voice: Voice) -> bool:
         engine_cls = self._registry.get(voice.engine)

@@ -7,67 +7,11 @@
     "resident": true
   },
   {
-    "name": "Rhodes (GM)",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Electric Piano",
-    "bank": 0,
-    "program": 4
-  },
-  {
-    "name": "Wurlitzer",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Electric Piano",
-    "bank": 0,
-    "program": 5
-  },
-  {
     "name": "DX10 FM",
     "engine": "modhost",
     "uri": "http://drobilla.net/plugins/mda/DX10",
     "category": "Electric Piano",
     "resident": true
-  },
-  {
-    "name": "FM E.Piano",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Electric Piano",
-    "bank": 8,
-    "program": 5
-  },
-  {
-    "name": "Clavinet",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Electric Piano",
-    "bank": 0,
-    "program": 7
-  },
-  {
-    "name": "Grand Piano",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Piano",
-    "bank": 0,
-    "program": 0
-  },
-  {
-    "name": "Bright Piano",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Piano",
-    "bank": 0,
-    "program": 1
-  },
-  {
-    "name": "Honky-Tonk Piano",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Piano",
-    "bank": 0,
-    "program": 3
   },
   {
     "name": "MDA Piano",
@@ -96,30 +40,6 @@
     "resident": true
   },
   {
-    "name": "Drawbar Organ",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Organ",
-    "bank": 0,
-    "program": 16
-  },
-  {
-    "name": "Percussive Organ",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Organ",
-    "bank": 0,
-    "program": 17
-  },
-  {
-    "name": "Rock Organ",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Organ",
-    "bank": 0,
-    "program": 18
-  },
-  {
     "name": "Combo Organ",
     "engine": "modhost",
     "uri": "http://drobilla.net/plugins/mda/Combo",
@@ -132,54 +52,6 @@
     "uri": "http://calf.sourceforge.net/plugins/Organ",
     "category": "Organ",
     "resident": true
-  },
-  {
-    "name": "Synth Brass (Jump)",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Synth",
-    "bank": 0,
-    "program": 62
-  },
-  {
-    "name": "Synth Brass 2",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Synth",
-    "bank": 0,
-    "program": 63
-  },
-  {
-    "name": "Poly Synth",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Synth",
-    "bank": 0,
-    "program": 90
-  },
-  {
-    "name": "Saw Lead",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Synth",
-    "bank": 0,
-    "program": 81
-  },
-  {
-    "name": "Square Lead",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Synth",
-    "bank": 0,
-    "program": 80
-  },
-  {
-    "name": "Warm Pad",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "Synth",
-    "bank": 0,
-    "program": 89
   },
   {
     "name": "JX10 Analog",
@@ -201,14 +73,6 @@
     "uri": "http://calf.sourceforge.net/plugins/Wavetable",
     "category": "Synth",
     "resident": true
-  },
-  {
-    "name": "General MIDI",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "General MIDI",
-    "bank": 0,
-    "program": 0
   },
   {
     "name": "DX7 E.Piano",

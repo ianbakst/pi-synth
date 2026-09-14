@@ -8,6 +8,7 @@ Connection is persistent (unlike FluidSynth which is per-command).
 """
 
 import logging
+import re
 from socket import AF_INET, SOCK_STREAM, socket
 
 logger = logging.getLogger(__name__)
@@ -72,13 +73,49 @@ class ModHostClient:
             return False
         return True
 
-    def load_plugin(self, uri: str, instance: int = 0) -> bool:
-        """Add an LV2 plugin instance."""
-        return self._ok(f"add {uri} {instance}")
+    def _code(self, cmd: str) -> int | None:
+        """The numeric status from mod-host's `resp <n>`, or None if there's no
+        parseable reply."""
+        resp = self._send(cmd)
+        if resp is None:
+            logger.error("mod-host no response to: %s", cmd)
+            return None
+        match = re.match(r"resp\s+(-?\d+)", resp)
+        if not match:
+            logger.error("mod-host unparseable reply to %r: %s", cmd, resp)
+            return None
+        return int(match.group(1))
 
-    def remove_plugin(self, instance: int = 0) -> bool:
-        """Remove an LV2 plugin instance."""
-        return self._ok(f"remove {instance}")
+    def load_plugin(self, uri: str, instance: int = 0) -> bool:
+        """Add an LV2 plugin instance.
+
+        NOT `_ok`: mod-host answers a successful `add` with the *instance
+        number* (`resp 9` for instance 9), not `resp 0`; only a negative code is
+        an error. Checking for `resp 0` meant every add succeeded only at
+        instance 0 — invisible while every instrument lived there, and it broke
+        every other slot the moment instruments became resident: only the one
+        voice that happened to land at 0 would load, and the master chain (90)
+        and effects rack (10+) never loaded at all.
+        """
+        code = self._code(f"add {uri} {instance}")
+        if code is None:
+            return False
+        if code < 0:
+            logger.error("mod-host refused %s at %d (resp %d)", uri, instance, code)
+            return False
+        return True
+
+    def remove_plugin(self, instance: int = 0, missing_ok: bool = False) -> bool:
+        """Remove an LV2 plugin instance.
+
+        `missing_ok` is for clearing a slot defensively before an add: removing
+        an instance that isn't there returns an error code, and logging that on
+        every load would bury real failures in the journal under noise.
+        """
+        if not missing_ok:
+            return self._ok(f"remove {instance}")
+        code = self._code(f"remove {instance}")
+        return code is not None
 
     def set_param(self, instance: int, symbol: str, value: str) -> bool:
         """Set a plugin parameter by LV2 symbol (a lv2:ControlPort)."""

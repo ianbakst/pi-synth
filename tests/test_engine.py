@@ -221,10 +221,14 @@ def test_a_second_voice_gets_its_own_slot_and_the_first_stays_loaded():
     ctx = ctx_for(mod_host=mh)
     e = ModHostEngine(EPIANO, ctx)
     e.start()
+    mh.reset_mock()          # only what the *second* load does matters here
     assert e.load(JX10) is True
     assert e.instance == 1
-    mh.remove_plugin.assert_not_called()
+    # Both stay loaded: taking a new slot must not evict the first voice.
+    # (Slots clear the target instance before adding, so remove_plugin(1) is
+    # expected; removing instance 0 would mean the first was unloaded.)
     assert ctx.slots.loaded_instances() == [0, 1]
+    assert 0 not in [c.args[0] for c in mh.remove_plugin.call_args_list]
 
 
 def test_switching_back_reuses_the_loaded_slot_without_touching_mod_host():
@@ -346,3 +350,15 @@ def test_a_non_default_font_selects_on_its_own_sfont_id(tmp_path, monkeypatch):
     FluidSynthEngine(voice, ctx_for(fluidsynth=fs)).load(voice)
     fs.load_soundfont.assert_called_once_with(str(other))
     fs.select_preset.assert_called_once_with(0, 2, 0, 4)
+
+
+def test_every_engine_validation_accepts_can_actually_be_loaded():
+    # A hand-kept registry omitted `fluida`: soundfont voices validated as
+    # usable, then failed with "unknown engine" at load time.
+    from synth_ui.clients.voice import KNOWN_ENGINES
+
+    assert KNOWN_ENGINES <= set(ENGINE_REGISTRY)
+
+
+def test_soundfont_voices_are_played_by_mod_host():
+    assert ENGINE_REGISTRY["fluida"] is ModHostEngine
