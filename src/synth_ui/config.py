@@ -24,6 +24,21 @@ RIGS_FILE = os.path.expanduser("~/.synth-rigs.json")
 # write a number into anyway. See clients/trims.py.
 TRIMS_FILE = os.path.expanduser("~/.synth-trims.json")
 
+# --- Hands-free rig switching (clients/midi_control.py) ---
+# Control Change numbers a footswitch sends to step through rigs. 80 and 81 are
+# in the "general purpose / undefined" block of the MIDI spec, so they won't
+# collide with sustain (64), expression (11) or anything the Roland sends on its
+# own. Most footswitches let you set the CC they transmit.
+#
+# Rig order is the order on the rigs screen, which is drag-to-reorder — so the
+# pedal walks the set list in the sequence you arranged.
+MIDI_NEXT_RIG_CC = 80
+MIDI_PREV_RIG_CC = 81
+# Program Change selects a rig by position (0 = first). Off by default: the
+# Roland sends Program Change when its own tones are changed from the panel,
+# which would yank the rig out from under you mid-song.
+MIDI_PROGRAM_SELECTS_RIG = False
+
 # Selected ALSA card id (e.g. "sndrpihifiberry"). The UI writes it; scripts/
 # start-jack.sh reads it to pick JACK's device. Absent = auto-detect (default).
 AUDIO_DEVICE_FILE = os.path.expanduser("~/.synth-audio-device")

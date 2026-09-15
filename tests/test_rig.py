@@ -195,3 +195,59 @@ def test_an_empty_rename_keeps_the_old_name(tmp_path):
     lib = RigLibrary(str(tmp_path / "rigs.json"))
     rig = lib.create_from_voice("Rhodes EP")
     assert lib.rename(rig, "   ") == "Rhodes EP"
+
+
+class TestOrdering:
+    """Rig order is performance order — what next/previous steps through."""
+
+    def library(self, tmp_path, names):
+        from synth_ui.clients.rig import Rig, RigLibrary
+
+        return RigLibrary(str(tmp_path / "rigs.json"), [Rig(n, n) for n in names])
+
+    def test_move_reorders(self, tmp_path):
+        lib = self.library(tmp_path, ["A", "B", "C"])
+        assert lib.move(2, 0)
+        assert lib.names() == ["C", "A", "B"]
+
+    def test_move_persists(self, tmp_path):
+        from synth_ui.clients.rig import RigLibrary
+
+        lib = self.library(tmp_path, ["A", "B", "C"])
+        lib.move(0, 2)
+        assert RigLibrary.load(lib.path).names() == ["B", "C", "A"]
+
+    def test_move_to_the_same_place_is_a_noop(self, tmp_path):
+        assert not self.library(tmp_path, ["A", "B"]).move(1, 1)
+
+    def test_move_clamps_past_the_end(self, tmp_path):
+        lib = self.library(tmp_path, ["A", "B", "C"])
+        assert lib.move(0, 99)
+        assert lib.names() == ["B", "C", "A"]
+
+    def test_move_rejects_a_bad_source(self, tmp_path):
+        assert not self.library(tmp_path, ["A"]).move(5, 0)
+
+    def test_step_forward(self, tmp_path):
+        lib = self.library(tmp_path, ["A", "B", "C"])
+        assert lib.step("A", 1).name == "B"
+
+    def test_step_back(self, tmp_path):
+        lib = self.library(tmp_path, ["A", "B", "C"])
+        assert lib.step("B", -1).name == "A"
+
+    def test_step_wraps_both_ways(self, tmp_path):
+        """A footswitch can't show you that you've hit the end, so stopping
+        dead there is worse than looping."""
+        lib = self.library(tmp_path, ["A", "B", "C"])
+        assert lib.step("C", 1).name == "A"
+        assert lib.step("A", -1).name == "C"
+
+    def test_step_from_nothing_gives_the_first(self, tmp_path):
+        assert self.library(tmp_path, ["A", "B"]).step(None, 1).name == "A"
+
+    def test_step_from_a_deleted_rig_gives_the_first(self, tmp_path):
+        assert self.library(tmp_path, ["A", "B"]).step("gone", 1).name == "A"
+
+    def test_step_on_an_empty_library_is_none(self, tmp_path):
+        assert self.library(tmp_path, []).step(None, 1) is None

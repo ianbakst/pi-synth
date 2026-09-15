@@ -74,17 +74,42 @@ class EffectsRack:
     # Chain management
     # ------------------------------------------------------------------
 
-    def add(self, uri: str) -> int | None:
-        """Load an effect at the end of the chain. Returns its instance id."""
+    def add(self, uri: str, index: int | None = None) -> int | None:
+        """Load an effect into the chain, at `index` or at the end.
+
+        Position matters to the sound, not just to the picture: a reverb before
+        an overdrive is a different instrument from one after it. The instance
+        id is independent of chain position — _rechain() wires by list order,
+        not by instance number — so inserting needs no renumbering.
+        """
         instance = _BASE_INSTANCE
         if self._effects:
             instance = max(e.instance for e in self._effects) + 1
+        if instance > _MAX_INSTANCE:
+            logger.error("effects rack full; not loading %s", uri)
+            return None
         if not self._mh.load_plugin(uri, instance):
             logger.error("effects mod-host failed to load %s", uri)
             return None
-        self._effects.append(Effect(instance, uri))
+        effect = Effect(instance, uri)
+        if index is None or index >= len(self._effects):
+            self._effects.append(effect)
+        else:
+            self._effects.insert(max(0, index), effect)
         self._rechain()
         return instance
+
+    def move(self, source: int, target: int) -> bool:
+        """Reorder the chain by position. Nothing is unloaded — only the JACK
+        wiring changes — so a dragged effect keeps every parameter set on it."""
+        if not (0 <= source < len(self._effects)):
+            return False
+        target = max(0, min(target, len(self._effects) - 1))
+        if source == target:
+            return False
+        self._effects.insert(target, self._effects.pop(source))
+        self._rechain()
+        return True
 
     def remove(self, instance: int) -> None:
         self._mh.remove_plugin(instance)

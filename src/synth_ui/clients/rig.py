@@ -191,6 +191,34 @@ class RigLibrary:
         self.save()
         return candidate
 
+    def move(self, from_index: int, to_index: int) -> bool:
+        """Reorder the library. Order is the performance order — the sequence
+        next/previous steps through — so it is user-controlled, not creation
+        order, and it persists with everything else in the rig file."""
+        if not (0 <= from_index < len(self.rigs)):
+            return False
+        to_index = max(0, min(to_index, len(self.rigs) - 1))
+        if from_index == to_index:
+            return False
+        rig = self.rigs.pop(from_index)
+        self.rigs.insert(to_index, rig)
+        self.save()
+        return True
+
+    def step(self, current: str | None, delta: int) -> Rig | None:
+        """The next (or previous) rig in order, wrapping at the ends.
+
+        Wrapping because the alternative — stopping dead at the last rig — is
+        worse mid-song than looping round, and because a footswitch has no way
+        to show you that you've hit the end.
+        """
+        if not self.rigs:
+            return None
+        names = [r.name for r in self.rigs]
+        if current is None or current not in names:
+            return self.rigs[0]
+        return self.rigs[(names.index(current) + delta) % len(self.rigs)]
+
     def remove(self, name: str) -> None:
         self.rigs = [r for r in self.rigs if r.name != name]
         self.save()

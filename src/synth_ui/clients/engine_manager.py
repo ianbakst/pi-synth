@@ -481,8 +481,14 @@ class EngineManager:
     def effects(self) -> list[Effect]:
         return self._effects.effects()
 
-    def add_effect(self, uri: str) -> int | None:
-        instance = self._effects.add(uri)
+    def move_effect(self, source: int, target: int) -> bool:
+        moved = self._effects.move(source, target)
+        if moved and self._active is not None:
+            self._wire(self._active)
+        return moved
+
+    def add_effect(self, uri: str, index: int | None = None) -> int | None:
+        instance = self._effects.add(uri, index)
         if instance is not None and self._active is not None:
             self._wire(self._active)
         return instance

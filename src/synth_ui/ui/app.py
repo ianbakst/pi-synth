@@ -9,6 +9,7 @@ from synth_ui.clients.effects_catalog import (
     annotate_effects,
     read_effects_manifest,
 )
+from synth_ui.clients.midi_control import MidiControlListener
 from synth_ui.clients.rig import Rig, RigEffect, RigLibrary
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
@@ -20,6 +21,9 @@ from synth_ui.config import (
     FLUIDSYNTH_PORT,
     IS_PI,
     MAX_GAIN,
+    MIDI_NEXT_RIG_CC,
+    MIDI_PREV_RIG_CC,
+    MIDI_PROGRAM_SELECTS_RIG,
     MOD_HOST_PORT,
     RIGS_FILE,
     SCREEN_H,
@@ -95,6 +99,10 @@ class SynthUI:
         self._effects_screen: EffectsScreen | None = None
         self._catalog_screen: EffectsCatalogScreen | None = None
         self._params_screen: EffectParamsScreen | None = None
+        self._insert_at: int | None = None
+        # Set while the voice picker is open to swap an existing rig's
+        # instrument rather than to build a new rig from the chosen voice.
+        self._picking_replaces_instrument = False
         # Annotated so the browser can grey out effects this board can't load,
         # rather than letting a tap fail silently.
         self._catalog: list[EffectCatalogEntry] = annotate_effects(
@@ -116,17 +124,31 @@ class SynthUI:
             on_load_rig=self._load_rig,
             on_remove_rig=self._on_remove_rig,
             on_edit_rig=self._show_rename_screen,
-            on_new=self._show_voice_picker,
+            on_new=lambda: self._show_voice_picker(replaces_instrument=False),
             on_edit=self._show_effects_screen,
             on_audio=self._show_audio_screen,
             on_gain_change=self._on_gain_change,
             on_save=_save_state,
+            on_reorder=self._on_reorder_rigs,
             effect_names={e.uri: e.name for e in self._catalog},
             unavailable=self._rig_unavailable,
             # Falls back to the first usable rig if this one is gone.
             initial_name=_load_state(),
             initial_gain=self._gain,
         )
+        # Hands-free rig switching. Runs whether or not a pedal is attached —
+        # aseqdump subscribes to whatever appears, so plugging one in later
+        # works with no restart. Failure is non-fatal: the touchscreen is the
+        # primary control and must keep working regardless.
+        self._midi_control = MidiControlListener(
+            on_next=self._home.select_next,
+            on_previous=self._home.select_previous,
+            next_cc=MIDI_NEXT_RIG_CC,
+            prev_cc=MIDI_PREV_RIG_CC,
+            on_program=self._select_rig_by_index if MIDI_PROGRAM_SELECTS_RIG else None,
+        )
+        self._midi_control.start()
+
         self.screen: Screen = SplashScreen()
         self._splash_start = pygame.time.get_ticks()
         self._splash_done = False
@@ -139,7 +161,7 @@ class SynthUI:
         """Rebuild the voice library from the manifest and the soundfont folder.
 
         Deliberately NOT done on lookup. `_voice_for` is reached from
-        RigList.draw — once per visible rig, every frame — and building the
+        the rig tiles — rebuilt whenever the library changes — and building the
         library scans every soundfont on the SD card and reads its header. Doing
         that per lookup meant re-reading the whole library over a hundred times
         a second: 66% CPU from a 30 fps touchscreen loop, and heavy SD I/O on
@@ -170,23 +192,42 @@ class SynthUI:
             return False
         return self._engine.load_rig(rig, voice)
 
-    def _show_voice_picker(self) -> None:
+    def _show_voice_picker(self, replaces_instrument: bool = False) -> None:
+        """The voice catalogue, opened for one of two jobs.
+
+        The flag is set here rather than by the caller so that "New" always
+        clears it: a swap abandoned with Back would otherwise leave it set, and
+        the next new rig would silently replace the current one's instrument
+        instead of creating anything.
+        """
+        self._picking_replaces_instrument = replaces_instrument
         self._reload_library()   # pick up fonts added since startup
         self._picker = VoicePickerScreen(
             on_pick=self._on_voice_picked,
-            on_back=self._show_home,
+            # Back returns where you came from: the chain you were editing, or
+            # home if you were starting a new rig.
+            on_back=(
+                self._show_effects_screen if replaces_instrument else self._show_home
+            ),
             on_usb=self._show_usb_screen,
         )
         self.screen = self._picker
 
     def _on_voice_picked(self, voice: Voice) -> None:
         """A picked voice becomes a new rig — bare instrument, no effects yet —
-        which is then loaded and made active, ready for effects to be stacked."""
+        which is then loaded and made active, ready for effects to be stacked.
+
+        Unless the picker was opened from the chain's instrument block, in which
+        case it replaces the active rig's instrument and leaves its chain."""
+        if self._picking_replaces_instrument:
+            self._picking_replaces_instrument = False
+            self._swap_instrument(voice)
+            return
         rig = self._rigs.create_from_voice(voice.name)
         self._home.refresh(self._rigs.rigs)
         ok = self._engine.load_rig(rig, voice)
         self._home._active_rig = rig
-        self._home.rig_list.selected_index = self._rigs.rigs.index(rig)
+        self._home.grid.tiles = self._home._tiles()
         self._home.header.name = rig.name
         self._home.header.error = not ok
 
@@ -212,6 +253,17 @@ class SynthUI:
     def _on_remove_rig(self, rig: Rig) -> None:
         self._rigs.remove(rig.name)
         self._home.refresh(self._rigs.rigs)
+
+    def _select_rig_by_index(self, index: int) -> None:
+        """Program Change selects a rig by position. Out-of-range is ignored
+        rather than clamped: a Program Change past the end of the set list is
+        someone else's message, not a request for the last rig."""
+        if 0 <= index < len(self._rigs.rigs):
+            self._home._select_rig(self._rigs.rigs[index])
+
+    def _on_reorder_rigs(self, source: int, target: int) -> None:
+        if self._rigs.move(source, target):
+            self._home.refresh(self._rigs.rigs)
 
     def _sync_active_rig_effects(self) -> None:
         """Persist the current effects chain into the active rig. Called when
@@ -310,7 +362,11 @@ class SynthUI:
             on_add=self._show_effects_catalog_screen,
             on_back=self._leave_effects_screen,
             on_trim_change=self._engine.set_rig_trim,
+            on_reorder=self._on_reorder_effects,
+            on_change_instrument=self._show_instrument_swap,
             initial_trim=rig.trim_db if rig is not None else 0.0,
+            source_name=rig.voice if rig is not None else "",
+            rig_name=rig.name if rig is not None else "",
         )
         self.screen = self._effects_screen
 
@@ -318,7 +374,10 @@ class SynthUI:
         self._sync_active_rig_effects()
         self._show_home()
 
-    def _show_effects_catalog_screen(self) -> None:
+    def _show_effects_catalog_screen(self, index: int | None = None) -> None:
+        # Which `+` on the wire was tapped, so the effect lands where the chain
+        # wants it rather than always on the end.
+        self._insert_at = index
         self._catalog_screen = EffectsCatalogScreen(
             catalog=self._catalog,
             on_select=self._on_add_effect,
@@ -326,13 +385,40 @@ class SynthUI:
         )
         self.screen = self._catalog_screen
 
+    def _show_instrument_swap(self) -> None:
+        """Pick a different instrument for the rig being edited.
+
+        Same picker as building a new rig; what differs is what happens on the
+        way back, so the mode is recorded here rather than duplicating the
+        screen."""
+        self._show_voice_picker(replaces_instrument=True)
+
+    def _swap_instrument(self, voice: Voice) -> None:
+        """Change the active rig's instrument, keeping its effects chain.
+
+        The chain is the point of a rig, so it survives: the same reverb and
+        delay, now fed by a different instrument. Only the first block changes.
+        """
+        rig = self._home.active_rig
+        if rig is None:
+            return
+        rig.voice = voice.name
+        self._rigs.replace(rig)
+        self._engine.load_voice(voice)
+        self._home.refresh(self._rigs.rigs)
+        self._show_effects_screen()
+
+    def _on_reorder_effects(self, source: int, target: int) -> None:
+        if self._engine.move_effect(source, target):
+            self._show_effects_screen()
+
     def _on_bypass_effect(self, instance: int, bypassed: bool) -> None:
         """Toggling is a single mod-host command, so it happens inline rather
         than on a worker: putting it behind a spinner would make an A/B
         comparison feel slower than it is."""
         self._engine.set_effect_bypass(instance, bypassed)
         if self._effects_screen is not None:
-            self._effects_screen.rack_list.effects = self._engine.effects()
+            self._effects_screen.chain.effects = self._engine.effects()
 
     def _show_effect_params_screen(self, instance: int) -> None:
         effect = next(
@@ -389,7 +475,7 @@ class SynthUI:
         ).start()
 
     def _add_effect_worker(self, entry: EffectCatalogEntry) -> None:
-        instance = self._engine.add_effect(entry.uri)
+        instance = self._engine.add_effect(entry.uri, self._insert_at)
         if instance is not None:
             self._show_effects_screen()
         elif self._catalog_screen is not None:

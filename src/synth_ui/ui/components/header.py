@@ -17,6 +17,10 @@ from .base import Component
 _BACK_W = 48
 _ACTION_PAD = 12
 _ACTION_GAP = 8
+# Step-through buttons sit immediately after the name, in the gap the header
+# has always had between the name and the right-hand actions. They belong
+# there: they change which name is shown.
+_STEP_W = 44
 
 
 class Header(Component):
@@ -31,12 +35,16 @@ class Header(Component):
         on_action2: Callable | None = None,
         action3_label: str | None = None,
         on_action3: Callable | None = None,
+        on_prev: Callable | None = None,
+        on_next: Callable | None = None,
     ):
         super().__init__(rect)
         self.font = font
         self.name: str | None = None
         self.error: bool = False
         self.on_back = on_back
+        self.on_prev = on_prev
+        self.on_next = on_next
         # Actions render right-to-left in the order given (first = rightmost).
         self.actions: list[tuple[str, Callable]] = []
         if action_label and on_action:
@@ -51,6 +59,23 @@ class Header(Component):
         if value:
             self.error = False
         self._loading = value
+
+    def _step_rects(self) -> list[tuple[pygame.Rect, Callable]]:
+        """(rect, callback) for the prev/next buttons, laid out after the name."""
+        if not (self.on_prev and self.on_next):
+            return []
+        x = self.rect.right - 16
+        rects = []
+        for _r, _label, _cb in self._action_rects():
+            x = min(x, _r.x)
+        x -= _ACTION_GAP
+        for callback in (self.on_next, self.on_prev):
+            rect = pygame.Rect(
+                x - _STEP_W, self.rect.y + 10, _STEP_W, self.rect.height - 20
+            )
+            rects.append((rect, callback))
+            x = rect.x - 4
+        return rects
 
     def _action_rects(self) -> list[tuple[pygame.Rect, str, Callable]]:
         rects: list[tuple[pygame.Rect, str, Callable]] = []
@@ -87,7 +112,22 @@ class Header(Component):
                 label_surf,
                 (r.x + _ACTION_PAD, r.y + (r.height - label_surf.get_height()) // 2),
             )
-        if action_rects:
+        step_rects = self._step_rects()
+        for i, (r, _cb) in enumerate(step_rects):
+            pygame.draw.rect(surface, BTN_NORMAL, r, border_radius=6)
+            arrow = "\u203a" if i == 0 else "\u2039"
+            glyph = self.font.render(arrow, True, TEXT_ACTIVE)
+            surface.blit(
+                glyph,
+                (
+                    r.x + (r.width - glyph.get_width()) // 2,
+                    r.y + (r.height - glyph.get_height()) // 2,
+                ),
+            )
+
+        if step_rects:
+            right_margin = self.rect.right - step_rects[-1][0].x + _ACTION_GAP
+        elif action_rects:
             # leftmost action is last in the list
             right_margin = self.rect.right - action_rects[-1][0].x + _ACTION_GAP
 
@@ -116,6 +156,10 @@ class Header(Component):
                 )
                 if back_rect.collidepoint(event.pos):
                     self.on_back()
+                    return True
+            for r, cb in self._step_rects():
+                if r.collidepoint(event.pos):
+                    cb()
                     return True
             for r, _label, cb in self._action_rects():
                 if r.collidepoint(event.pos):
