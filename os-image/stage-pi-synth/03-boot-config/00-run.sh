@@ -66,6 +66,36 @@ EOF
 	fi
 fi
 
+# --- UART0 on GPIOs 14/15: the 5-pin DIN MIDI IN jack ---
+# Only the RX leg (GPIO15) is wired to a jack; GPIO14 stays TXD0 and unused.
+#
+# cm5 only. On BCM2712, uart0 is disabled by default and Bluetooth lives on its
+# own uart (`uarta` in bcm2712-rpi-cm5.dtsi), so the `dtoverlay=disable-bt` above
+# does nothing for these pins — that overlay only frees GPIO14/15 on pre-Pi-5
+# boards, where BT squats on the PL011. `dtparam=uart0=on` is what actually
+# enables the node here (see the `uart0 = <&uart0>, "status"` param in
+# bcm2712-rpi.dtsi). pi4 needs nothing: disable-bt already sets uart0 "okay" and
+# pins it to uart0_pins.
+#
+# Note we deliberately do NOT load dtoverlay=midi-uart0-pi5. That overlay exists
+# because 31250 baud isn't a standard termios speed, and it fakes the UART clock
+# by 38400/31250 so a *requested* 38400 comes out as 31250. ttymidi.service
+# instead asks for a true 31250 via BOTHER/TCSETS2, which the RP1 UART clock
+# divides exactly. Loading both would skew the rate — if the overlay is ever
+# added, ttymidi must switch to `-b 38400`.
+if [ "${PI_SYNTH_BOARD:-pi4}" = "cm5" ]; then
+	if ! grep -qE "^dtparam=uart0=on" "${CONFIG}"; then
+		cat >> "${CONFIG}" << 'EOF'
+
+# --- pi-synth: cm5 UART MIDI IN (GPIO15/RXD0) ---
+dtparam=uart0=on
+EOF
+		echo "config.txt: enabled uart0 on GPIOs 14/15 for DIN MIDI"
+	else
+		echo "config.txt: uart0 already enabled"
+	fi
+fi
+
 # --- cmdline.txt: isolate cores 2,3 for JACK/engines + quiet boot ---
 # Single-line file; append our args once if not already there.
 # Isolate cores 1,2,3 for audio: core 1 = JACK, core 2 = instrument engine,
@@ -73,14 +103,44 @@ fi
 # docs/engine-architecture.md.
 ISOL="isolcpus=1,2,3 nohz_full=1,2,3 rcu_nocbs=1,2,3"
 QUIET="quiet loglevel=3 vt.global_cursor_default=0 logo.nologo"
+# Never let a USB device be runtime-suspended. Every USB device on this box is a
+# MIDI controller that must respond the instant it is played; there is no
+# battery to save and nothing here is idle by design. Waking a suspended device
+# costs milliseconds at exactly the wrong moment.
+#
+# Honesty about provenance: this was added while chasing a MIDI latency bug that
+# turned out to be the keyboard (see CLAUDE.md, MIDI). It did NOT fix that, and
+# it has never been shown to fix anything. It is kept because it is the right
+# default for an always-on instrument, not because it is load-bearing.
+USB="usbcore.autosuspend=-1"
 if ! grep -q "isolcpus=1,2,3" "${CMDLINE}"; then
 	sed -i "s|\$| ${ISOL} ${QUIET}|" "${CMDLINE}"
 	echo "cmdline.txt: appended CPU isolation + quiet-boot args"
 else
 	echo "cmdline.txt: CPU isolation already present"
 fi
+# Separate guard: boards imaged before this arg existed have the isolation but
+# not this, and a combined check would skip them.
+if ! grep -q "usbcore.autosuspend" "${CMDLINE}"; then
+	sed -i "s|\$| ${USB}|" "${CMDLINE}"
+	echo "cmdline.txt: appended ${USB}"
+else
+	echo "cmdline.txt: usbcore.autosuspend already present"
+fi
 
 # Move the Linux console off the display (tty1 -> tty3): kernel + systemd boot
 # text no longer scrolls on the touchscreen. The login prompt is removed
 # separately by masking getty@tty1 (06-system-tuning). Idempotent.
 sed -i "s/\bconsole=tty1\b/console=tty3/" "${CMDLINE}"
+
+# Take the serial console off the MIDI pins. pi-gen's base cmdline (stage1/
+# 00-boot-files/files/cmdline.txt) ships console=serial0,115200, and serial0 is
+# the very UART the DIN MIDI jack feeds: `serial0 = &uart0` in bcm2712-rpi.dtsi
+# (cm5), and disable-bt re-aliases serial0 to the PL011 on GPIO14/15 (pi4). Left
+# in place, the kernel dumps boot text at 115200 onto the port and systemd's
+# getty-generator spawns a login prompt on it from this very argument — both
+# fighting the incoming MIDI stream. Dropping console= is therefore what removes
+# the getty too; no serial-getty mask is needed. The console stays reachable over
+# SSH and the touchscreen (cm5 also keeps its own debug UART, serial10/ttyAMA10,
+# on the dedicated connector, which this doesn't touch). Idempotent.
+sed -i "s/[[:space:]]*\bconsole=serial0,[0-9]*\b//" "${CMDLINE}"

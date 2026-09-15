@@ -2,6 +2,9 @@ python3-pygame
 fluidsynth
 jackd2
 a2jmidid
+# Kept for its LV2 bundle (/usr/lib/lv2/b_synth), which IS the Hammond now.
+# The standalone binary it also installs is no longer run — setbfree.service
+# was retired when the organ moved into mod-host. Do not drop this package.
 setbfree
 build-essential
 cmake
@@ -9,3 +12,31 @@ libsndfile1-dev
 libjack-jackd2-dev
 liblilv-dev
 libreadline-dev
+# Keep in sync with os-image/stage-pi-synth/00-base-packages/00-packages — that
+# list provisions a fresh image, this one is what deploy.sh installs onto a
+# running board. They had drifted: the LV2 plugin packages below were only in
+# the image list, so a deployed-to board could be missing the plugins the voice
+# catalog names.
+# LV2 plugins: effects, and the mda/Calf instruments in voices.json.
+calf-plugins
+zam-plugins
+x42-plugins
+mda-lv2
+# lv2ls / lv2info: the UI greys out voices whose plugin isn't installed, and
+# verify_voices --inspect reads a plugin's control symbols + patch properties.
+lilv-utils
+# --- Instrument plugins ---------------------------------------------------
+# amsynth: a two-oscillator analog model. This is the one for the 80s brass
+# poly (the Van Halen "Jump" sound is an Oberheim OB-Xa: detuned saws, fast
+# filter envelope). mda JX10 can approximate it; amsynth gets much closer and
+# ships presets.
+amsynth
+# zynaddsubfx-lv2: additive/subtractive/pad engine with a large preset bank —
+# breadth for pads, bells and leads that the mda and Calf synths don't cover.
+zynaddsubfx-lv2
+# Level calibration (synth_ui.tools.calibrate_levels).
+# aplaymidi (alsa-utils) plays the passage; jack-smf-player would be the
+# direct route but jack-smf-utils is no longer packaged for Debian.
+jack-capture
+alsa-utils
+ffmpeg

@@ -12,6 +12,30 @@ mkdir -p "${ROOTFS_DIR}/etc/systemd/journald.conf.d"
 install -m 644 files/journald-volatile.conf \
 	"${ROOTFS_DIR}/etc/systemd/journald.conf.d/volatile.conf"
 
+# --- RemoveIPC=no: stop SSH logouts from killing the audio stack ---
+# systemd-logind defaults to RemoveIPC=yes, which destroys every POSIX shared
+# memory segment and semaphore owned by a *normal* user (uid >= 1000) as soon as
+# that user's last login session ends. jackd runs as 'synth' (uid 1000) as a
+# system service, so an `ssh synth@host '<cmd>'` one-liner — a session that opens
+# and immediately closes — wipes /dev/shm/jack_default_1000_0, jack_db-1000/ and
+# every jack_sem.* out from under the running server.
+#
+# The failure is nastily silent: jackd holds open fds to the now-unlinked inodes,
+# so it keeps running and systemd keeps reporting `active`, but every path is
+# gone, so no client can ever connect again. Symptom is a synth that plays fine
+# until the first SSH login, then goes permanently quiet with every JACK client
+# failing "Cannot connect to server socket err = No such file or directory" —
+# diagnosed on hardware by `ls -l /proc/$(pgrep jackd)/fd` showing every JACK
+# file marked "(deleted)" against an empty /dev/shm.
+#
+# The appliance has no reason to reap IPC on logout, and admin here is entirely
+# over SSH, so this would fire constantly. Alternative fixes (running jackd as a
+# system uid < 1000, or `loginctl enable-linger synth`) are more invasive for the
+# same effect.
+mkdir -p "${ROOTFS_DIR}/etc/systemd/logind.conf.d"
+install -m 644 files/logind-keep-ipc.conf \
+	"${ROOTFS_DIR}/etc/systemd/logind.conf.d/10-keep-ipc.conf"
+
 on_chroot << 'EOF'
 set -e
 # No swap on an appliance (removes a page-fault jitter source). WiFi + SSH are
@@ -30,7 +54,23 @@ done
 # the isolated audio cores (1,2,3); it just runs on core 0 alongside SSH and
 # the rest of the non-RT stack. If this ever proves to add real jitter, revert
 # by moving it back into the loop above.
-systemctl enable avahi-daemon.service 2>/dev/null || true
+#
+# NOT `|| true`, and the result is *asserted* rather than assumed. On a board
+# built with the previous version of this line, avahi-daemon ended up installed
+# but `inactive` and not enabled — the enable didn't take, the `2>/dev/null ||
+# true` swallowed any sign of it, and the appliance was reachable only by IP.
+# Checking is-enabled catches the case where the command reports success without
+# creating the wants/ symlink.
+systemctl enable avahi-daemon.service
+systemctl is-enabled avahi-daemon.service
+
+# Fail the build if the hostname didn't take: `<hostname>.local` is the only way
+# to find this box on a network, and a mismatch between /etc/hostname and the
+# 127.0.1.1 line in /etc/hosts breaks resolution in ways that are tedious to
+# diagnose on an appliance with no console login (getty@tty1 is masked below).
+test -s /etc/hostname
+grep -q "127.0.1.1[[:space:]]\+$(cat /etc/hostname)" /etc/hosts
+echo "hostname: $(cat /etc/hostname).local will be published over mDNS"
 
 # Don't block boot waiting for the network to come "online": the audio stack
 # doesn't need the network, this alone costs ~7s of boot, and it can hang boot

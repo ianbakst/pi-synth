@@ -7,8 +7,9 @@ harvested-kernel image).
 
 ## Principles (unchanged from the design)
 
-- **No Python in the note/audio path.** Notes flow `a2jmidid → JACK → engine →
-  DAC` in realtime-thread space. Python only issues *control-plane* actions:
+- **No Python in the note/audio path.** Notes flow `a2jmidid`/`ttymidi` (USB /
+  DIN) `→ JACK → engine → DAC` in realtime-thread space. Python only issues
+  *control-plane* actions:
   start/stop an engine, load a preset, and patch the JACK graph.
 - **The app never manages JACK or RT scheduling itself.** JACK, mod-host, and
   a2jmidid run as systemd services (see `../systemd/`). Engines get their RT
@@ -44,7 +45,7 @@ the normal scheduler.
 | Core | Role | Isolated | Pinned via |
 |---|---|---|---|
 | **0** | OS + UI + all general IRQs | no | `synth-ui.service` `taskset -c 0` `Nice=5`; `cpu-performance.service` sets IRQ mask 1 |
-| **1** | JACK backend (audio heartbeat) + MIDI bridge + audio IRQ | yes | `jack.service` / `a2jmidid.service` `taskset -c 1`; audio IRQ steered by `cpu-performance.service` |
+| **1** | JACK backend (audio heartbeat) + MIDI bridges + audio IRQ | yes | `jack.service` / `a2jmidid.service` / `ttymidi.service` `taskset -c 1`; audio IRQ steered by `cpu-performance.service` |
 | **2** | Active instrument engine | yes | `fluidsynth-engine`/`setbfree`/pianoteq `taskset -c 2`; `mod-host` also uses this core (see below) |
 | **3** | Currently: mod-host overflow. Later: effects | yes | `mod-host` `taskset -c 2,3` today; a *second* mod-host for effects — **Phase 3, not yet built** — would also want this core |
 
@@ -110,14 +111,79 @@ raw RT floor, and the xrun counter over a sustained voice-*switching* session
 ## The JACK graph (data plane)
 
 ```
- a2j:<keyboard capture>  ──MIDI──▶  <active engine>:midi_in
-                                         │ audio out
-                                         ▼
+ a2j:<keyboard capture>   (USB) ─┐
+                                 ├──MIDI──▶  <active engine>:midi_in
+ ttymidi:MIDI_in     (5-pin DIN) ─┘               │ audio out
+                                                  ▼
                               [ effects rack (mod-host) ]   ← optional, persistent
                                          │
                                          ▼
                                  system:playback_1/2  (HiFiBerry DAC)
 ```
+
+### MIDI ingress: two transports, one rule
+
+USB and DIN are physically different transports and need different bridges —
+`a2jmidid` lifts ALSA-seq hardware ports into JACK, `ttymidi` (mod-audio's
+`mod-ttymidi`) reads the UART0 byte stream. Both are C, RT-scheduled, on core 1;
+neither puts Python in the note path.
+
+This also closed a latent bug. `a2jmidid -e` does **not** mean "hardware only" —
+it is opt-*in* for hardware ports and still exports software ALSA-seq clients
+alongside them. The previous rule ("any `a2j:` port whose name contains
+`capture`") therefore also matched ALSA's `Midi Through` loopback and wired it
+into the active instrument on every voice switch. Harmless — nothing feeds it —
+but junk in the graph; the physical flag excludes it.
+
+What keeps that from becoming a pile of special cases is that the control plane
+never names either of them. Both bridges register their JACK ports as
+`JackPortIsPhysical | JackPortIsTerminal` — the claim "this is a real jack on the
+box, not a software port" — so `JackGraph.keyboard_midi_sources()` matches on
+exactly that: **a physical MIDI source port**. `EngineManager._wire()` patches
+every one of them to the active instrument, so both keyboards play the current
+rig, and a third transport (a second DIN, BLE/RTP-MIDI) needs no code change.
+
+**Confirmed on the CM5** (2026-09-02), which is why the config looks like it
+does: with `dtparam=uart0=on`, `/dev/ttyAMA0` appears as `root:dialout` (so the
+`synth` user reaches it via the group pi-gen already grants — no unit-level
+group grant needed), GPIO14/15 mux to `TXD0`/`RXD0`, and the RP1 UART accepts a
+true 31250 baud through `TCSETS2`/`BOTHER` — verified against a 38400 control
+request, so no `midi-uart0-pi5` clock overlay is needed. Note `stty` *cannot*
+express 31250 (it errors "invalid argument"); that's a coreutils limitation, not
+a hardware one, so don't read it as a fault.
+
+**Not yet confirmed:** bytes on the wire. No MIDI-out gear was on hand when this
+landed, so the DIN jack, its opto-isolator, and the achieved divisor are unproven
+end to end. Everything up to and including "the JACK port exists and the UI
+patches it into the active rig" is verified. See the deferred check at the bottom
+of this section.
+
+The DIN jack is wired to UART0 RX (GPIO15) only — MIDI IN, no OUT.
+`ttymidi:MIDI_out` exists but is left unconnected. Setup lives in
+`os-image/stage-pi-synth/03-boot-config/00-run.sh` (enable `uart0`, and keep the
+kernel's serial console *off* those pins) and `systemd/ttymidi.service`
+(31250 baud, set directly via `BOTHER`/`TCSETS2` rather than with the
+`midi-uart0` clock-fudge overlay).
+
+**Deferred check — do this when a MIDI controller is available.** Play into the
+DIN jack and confirm notes sound through the active rig. If they don't, isolate
+with `python3 ~/synth/scripts/midisniff.py` (a `BOTHER`-mode raw byte dump —
+`stty` can't set this rate): note-on triples that track your playing mean the
+wire is fine and the fault is above it; garbage means the divisor is off after
+all, so add
+`dtoverlay=midi-uart0-pi5` and switch `ttymidi.service` to `-b 38400`; silence
+means wiring or the opto-isolator, DIN pins 4/5 first. Without a controller, a
+jumper from GPIO14 to GPIO15 loops TX back to RX and exercises the same path —
+but check it won't fight the opto's output stage on that net first.
+
+There is a simpler shape available later: the kernel's `snd_serial_generic`
+driver (`compatible = "serial-midi"`) would make the DIN port a real ALSA rawmidi
+card, so `a2jmidid` alone would carry both transports and `ttymidi.service` could
+be deleted. It is not enabled in `bcm2711_defconfig`/`bcm2712_defconfig` and so is
+absent from the harvested RT kernel; taking it would mean a kernel rebuild plus a
+hand-written overlay. Worth doing on the next kernel build, not before — and the
+port rule above already covers that world unchanged, since the DIN port would
+then simply appear under `a2j` as physical.
 
 Per-engine JACK identities (discover with `jack_lsp` / `jack_lsp -t` on the Pi —
 do not hardcode without checking):

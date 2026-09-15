@@ -9,6 +9,9 @@ from unittest.mock import MagicMock
 from synth_ui.clients.audio_devices import AudioDevices
 from synth_ui.clients.effects_rack import EffectsRack
 from synth_ui.clients.engine_manager import EngineManager
+from synth_ui.clients.master_chain import sink_for
+from synth_ui.clients.rig import Rig, RigEffect
+from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.voice import Voice
 
 APLAY = (
@@ -27,13 +30,20 @@ KBD = "a2j:KBD (capture): MIDI 1"
 
 
 class FakeJack:
-    def __init__(self, ready=True, ports=None):
+    def __init__(self, ready=True, ports=None, stale=None):
         self.ready = ready
         self.connects: list = []
         self._ports = ports or {}
+        self.stale: list = list(stale or [])
 
     def wait_for(self, *, client, type=None, is_output=None, timeout=0):
         return self.ready
+
+    def snapshot(self):
+        # Port names the manager can see; start() reads this to find stale
+        # mod-host instances left over from a previous UI session.
+        names = {p for ports in self._ports.values() for p in ports}
+        return dict.fromkeys(self.stale + sorted(names))
 
     def keyboard_midi_sources(self, snapshot=None):
         return [KBD]
@@ -118,16 +128,51 @@ class ModFake(_Rec):
     audio = ("mod-host:o1", "mod-host:o2")
 
 
-def make_mgr(jack=None):
+class FakeMaster:
+    """Stand-in for MasterChain. `ready=False` (the default) models a unit whose
+    master plugins aren't installed, where everything routes straight to the DAC."""
+
+    def __init__(self, ready=False, ports=("effect_90:in_l", "effect_90:in_r")):
+        self.ready = ready
+        self._ports = list(ports)
+        self.volume_db: float | None = None
+        self.trim_db: float | None = None
+        self.torn_down = False
+
+    def ensure(self):
+        return self.ready
+
+    def teardown(self):
+        self.torn_down = True
+
+    def is_ready(self):
+        return self.ready
+
+    def input_ports(self):
+        return list(self._ports) if self.ready else []
+
+    def set_volume_db(self, db):
+        self.volume_db = db
+
+    def set_trim_db(self, db):
+        self.trim_db = db
+
+
+def make_mgr(jack=None, master=None):
     EVENTS.clear()
-    m = EngineManager()
+    # start_timeout=0: no master-chain bring-up retry loop in tests.
+    m = EngineManager(start_timeout=0)
     m._jack = jack or FakeJack()
     m._mod_host = MagicMock()
     m._registry = {"fluidsynth": FluidFake, "sfizz": ModFake, "dexed": ModFake}
-    # __init__ already built self._effects against the pre-swap real jack/mod_host;
-    # rebuild it against the fakes above so effects tests never touch real JACK.
-    m._effects = EffectsRack(m._jack, m._mod_host)
-    m._ctx.mod_host_needed = lambda: not m._effects.is_empty()
+    # __init__ already built self._effects/_master/_slots against the pre-swap
+    # real jack/mod_host; rebuild against the fakes so tests never touch real
+    # JACK or a mod-host socket.
+    m._slots = InstrumentSlots(m._mod_host)
+    m._ctx.slots = m._slots
+    m._master = master or FakeMaster()
+    m._effects = EffectsRack(m._jack, m._mod_host, sink=sink_for(m._master, m._jack))
+    m._ctx.mod_host_needed = lambda: True
     return m
 
 
@@ -273,11 +318,15 @@ EFFECT_10_AND_11_PORTS = {
 }
 
 
-def test_effects_available_only_while_modhost_engine_active():
+def test_effects_are_available_under_every_voice():
+    # Reversal of prior behaviour: effects used to require a mod-host instrument
+    # to be active, so the Hammond and the GM piano could never have reverb.
+    # mod-host is always up now (it hosts the master chain), so the rack is
+    # always reachable — a process engine just feeds it over JACK.
     m = make_mgr()
-    assert m.effects_available() is False
+    assert m.effects_available() is True
     m.load_voice(GM)
-    assert m.effects_available() is False
+    assert m.effects_available() is True
     m.load_voice(SFIZZ)
     assert m.effects_available() is True
 
@@ -314,11 +363,272 @@ def test_remove_first_effect_rewires_instrument_to_new_first():
     assert ("mod-host:o1", "effect_11:in_left") in jack.connects
 
 
-def test_mod_host_needed_reflects_effects_rack_state():
+def test_mod_host_is_never_stopped_by_an_instrument_switch():
+    # mod-host hosts the master chain, which every voice feeds through, so
+    # ModHostEngine.stop() must leave the process running whatever the rack
+    # holds. Stopping it would take the whole output path down with the
+    # instrument.
     jack = FakeJack(ports=EFFECT_10_PORTS)
     m = make_mgr(jack)
-    assert m._ctx.mod_host_needed() is False
+    assert m._ctx.mod_host_needed() is True
     assert m.add_effect("urn:reverb") == 10
     assert m._ctx.mod_host_needed() is True
     m.remove_effect(10)
-    assert m._ctx.mod_host_needed() is False
+    assert m._ctx.mod_host_needed() is True
+
+
+# --- master chain routing + level ------------------------------------------
+
+def test_instrument_routes_through_the_master_chain_when_it_is_up():
+    jack = FakeJack()
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    assert m.load_voice(GM) is True
+    assert ("fluidsynth:l", "effect_90:in_l") in jack.connects
+    assert ("fluidsynth:r", "effect_90:in_r") in jack.connects
+    # the master owns the leg to the DAC; the instrument must not bypass it
+    assert ("fluidsynth:l", "system:playback_1") not in jack.connects
+
+
+def test_instrument_falls_back_to_the_dac_when_no_master_chain_loaded():
+    # A missing master plugin costs level control, never sound.
+    jack = FakeJack()
+    m = make_mgr(jack, master=FakeMaster(ready=False))
+    assert m.load_voice(GM) is True
+    assert ("fluidsynth:l", "system:playback_1") in jack.connects
+
+
+def test_effects_rack_tail_feeds_the_master_not_the_dac():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    assert m.add_effect("urn:reverb") == 10
+    assert ("effect_10:out_left", "effect_90:in_l") in jack.connects
+    assert ("effect_10:out_left", "system:playback_1") not in jack.connects
+
+
+def test_loading_a_voice_applies_its_measured_trim():
+    # The whole point of gain_trim_db: switching instruments shouldn't jump in
+    # level. Applied before the engine makes sound, not after.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    quiet = Voice("Quiet", "fluidsynth", "/sf/q.sf2", "GM", gain_trim_db=-4.5)
+    assert m.load_voice(quiet) is True
+    assert master.trim_db == -4.5
+
+
+def test_volume_reaches_every_voice_not_just_fluidsynth():
+    # set_gain used to only reach fluidsynth, so most voices had no volume
+    # control at all.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    m.load_voice(SFIZZ)
+    m.set_gain(5.0)
+    assert master.volume_db == 0.0     # top of the slider is full scale
+    m.set_gain(2.5)
+    assert abs(master.volume_db - -12.04) < 0.05
+    m.set_gain(0.0)
+    assert master.volume_db == -60.0   # silence floor, not a tiny gain
+
+
+def test_volume_falls_back_to_fluidsynth_without_a_master_chain():
+    m = make_mgr(master=FakeMaster(ready=False))
+    m._fluidsynth = MagicMock()
+    m.load_voice(GM)
+    m.set_gain(2.0)
+    m._fluidsynth.set_gain.assert_called_once_with(2.0)
+
+
+def test_changing_audio_card_rebuilds_the_master_chain(tmp_path):
+    # mod-host cycles with jack, so its plugins are gone: stale wiring must be
+    # dropped and the chain rebuilt before the voice is re-established.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    m._audio_device_file = str(tmp_path / "dev")
+    m._ctx.systemctl = lambda argv: 0
+    m.load_voice(GM)
+    assert m.set_audio_device("Headphones") is True
+    assert master.torn_down is True
+
+
+# --- rigs -------------------------------------------------------------------
+
+def test_load_rig_applies_chain_then_instrument_then_level():
+    jack = FakeJack(ports=EFFECT_10_PORTS)
+    master = FakeMaster(ready=True)
+    m = make_mgr(jack, master=master)
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano", gain_trim_db=-2.0)
+    rig = Rig(name="Wet Piano", voice="Piano", effects=[RigEffect("urn:reverb")],
+              trim_db=-1.0)
+
+    assert m.load_rig(rig, voice) is True
+    # effects settled before the instrument was wired into the chain head
+    assert ("mod-host:o1", "effect_10:in_left") in jack.connects
+    # rig trim stacks on the voice's calibrated trim
+    assert master.trim_db == -3.0
+
+
+def test_switching_rigs_reuses_a_shared_effect():
+    jack = FakeJack(ports=EFFECT_10_AND_11_PORTS)
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano")
+    m.load_rig(Rig(name="A", voice="Piano", effects=[RigEffect("urn:reverb")]), voice)
+    m._mod_host.reset_mock()
+
+    m.load_rig(
+        Rig(name="B", voice="Piano",
+            effects=[RigEffect("urn:reverb"), RigEffect("urn:delay")]),
+        voice,
+    )
+    # the shared reverb was never re-instantiated
+    m._mod_host.load_plugin.assert_called_once_with("urn:delay", 11)
+
+
+def test_selecting_a_catalog_voice_drops_the_rig_trim():
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano", gain_trim_db=-2.0)
+    m.load_rig(Rig(name="A", voice="Piano", trim_db=-5.0), voice)
+    assert master.trim_db == -7.0
+    m.load_voice(voice)      # straight from the catalog, no rig
+    assert master.trim_db == -2.0
+
+
+# --- residency: inactive instruments keep their ports -----------------------
+
+class SlotFake(_Rec):
+    """A mod-host engine whose ports move per voice, as resident slots do."""
+
+    key = "modhost"
+    jack_client = "mod-host"
+
+    def load(self, voice):
+        self.calls.append(("load", voice.name))
+        self.midi = f"effect_{voice.name}:control"
+        self.audio = (f"effect_{voice.name}:o1", f"effect_{voice.name}:o2")
+        return True
+
+
+def test_switching_within_mod_host_disconnects_the_previous_instrument():
+    # Instruments stay loaded now, so jackd no longer drops the old edges when
+    # a voice is torn down. Without an explicit disconnect the previous voice
+    # would keep taking MIDI and keep feeding the sink — two at once.
+    jack = FakeJack()
+    m = make_mgr(jack)
+    m._registry = {"sfizz": SlotFake, "dexed": SlotFake}
+    a = Voice("A", "sfizz", "/sfz/a.sfz", "Piano")
+    b = Voice("B", "sfizz", "/sfz/b.sfz", "Piano")
+
+    m.load_voice(a)
+    m.load_voice(b)
+
+    assert ("effect_B:o1", "system:playback_1") in jack.connects
+    assert ("effect_A:o1", "system:playback_1") not in jack.connects
+    assert (KBD, "effect_A:control") not in jack.connects
+    assert (KBD, "effect_B:control") in jack.connects
+
+
+def test_new_ports_are_connected_before_the_old_are_dropped():
+    # No silent gap on a switch.
+    jack = FakeJack()
+    m = make_mgr(jack)
+    m._registry = {"sfizz": SlotFake}
+    m.load_voice(Voice("A", "sfizz", "/sfz/a.sfz", "Piano"))
+    EVENTS.clear()
+    m.load_voice(Voice("B", "sfizz", "/sfz/b.sfz", "Piano"))
+
+    connect_new = EVENTS.index(("connect", "effect_B:o1", "system:playback_1"))
+    drop_old = EVENTS.index(("disconnect", "effect_A:o1", "system:playback_1"))
+    assert connect_new < drop_old
+
+
+def test_a_switch_landing_on_the_same_slot_keeps_its_wiring():
+    # Re-selecting the active voice must not disconnect what it just wired.
+    jack = FakeJack()
+    m = make_mgr(jack)
+    m._registry = {"sfizz": SlotFake}
+    voice = Voice("A", "sfizz", "/sfz/a.sfz", "Piano")
+    m.load_voice(voice)
+    EVENTS.clear()
+    m.load_voice(voice)
+    assert not [e for e in EVENTS if e[0] == "disconnect"]
+    assert ("effect_A:o1", "system:playback_1") in jack.connects
+
+
+def test_changing_audio_card_drops_stale_slot_bookkeeping(tmp_path):
+    # mod-host cycles with jack, so every resident plugin is gone; reusing the
+    # remembered slots would wire a voice to nothing.
+    m = make_mgr(master=FakeMaster(ready=True))
+    m._audio_device_file = str(tmp_path / "dev")
+    m._ctx.systemctl = lambda argv: 0
+    m._slots.acquire(
+        Voice("A", "modhost", "", "", uri="urn:p", resident=True)
+    )
+    assert m._slots.loaded_instances() == [0]
+    m.set_audio_device("Headphones")
+    assert m._slots.loaded_instances() == []
+
+
+def test_rig_trim_stacks_on_the_active_voices_measured_trim():
+    # The by-ear nudge sits on top of the calibrated per-voice offset, and has
+    # to be audible while the slider moves.
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    voice = Voice("Piano", "sfizz", "/sfz/p.sfz", "Piano", gain_trim_db=-2.0)
+    m.load_voice(voice)
+    m.set_rig_trim(-3.5)
+    assert master.trim_db == -5.5
+
+
+def test_rig_trim_before_any_voice_is_loaded_does_not_crash():
+    master = FakeMaster(ready=True)
+    m = make_mgr(master=master)
+    m.set_rig_trim(-3.0)
+    assert master.trim_db == -3.0
+
+
+# --- volume never exceeds full scale -----------------------------------------
+
+def test_the_volume_slider_never_goes_above_full_scale():
+    # Volume sits AFTER the limiter, so a positive dB value clips at the DAC
+    # where the limiter can't help. The old mapping put 0 dB at 20% of the
+    # slider, making the top four-fifths all clipping.
+    from synth_ui.clients.engine_manager import _gain_to_db
+    from synth_ui.config import MAX_GAIN
+
+    for pct in range(0, 101, 5):
+        assert _gain_to_db(MAX_GAIN * pct / 100) <= 0.0
+
+
+def test_the_slider_spreads_audible_change_across_its_travel():
+    # A usable fader has meaningful attenuation across its range, not crammed
+    # into the bottom fifth.
+    from synth_ui.clients.engine_manager import _gain_to_db
+    from synth_ui.config import MAX_GAIN
+
+    assert -15 < _gain_to_db(MAX_GAIN * 0.5) < -9     # halfway is clearly quieter
+    assert _gain_to_db(MAX_GAIN * 0.9) > -3            # near the top is near full
+
+
+def test_the_boot_volume_leaves_headroom():
+    from synth_ui.clients.engine_manager import _gain_to_db
+    from synth_ui.config import DEFAULT_GAIN
+
+    assert -12 < _gain_to_db(DEFAULT_GAIN) < 0
+
+
+# --- a UI session starts from a clean mod-host --------------------------------
+
+def test_start_clears_plugins_left_by_a_previous_ui_session():
+    # mod-host outlives a UI restart, keeping the old session's plugins and
+    # their JACK connections. A stale instrument -> DAC edge bypassed the
+    # volume stage; a stale limiter at 90 made this session's add refused.
+    jack = FakeJack(stale=["effect_0:outL", "effect_0:control", "effect_90:out_l"])
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    m.start()
+    removed = sorted({c.args[0] for c in m._mod_host.remove_plugin.call_args_list})
+    assert removed == [0, 90]
+
+
+def test_start_on_a_fresh_mod_host_removes_nothing():
+    m = make_mgr(FakeJack(), master=FakeMaster(ready=True))
+    m.start()
+    m._mod_host.remove_plugin.assert_not_called()

@@ -60,6 +60,25 @@ class FluidSynthController:
         logger.info("Loaded soundfont: %s", path)
         return True
 
+    def current_sfont_id(self) -> int:
+        """ID of the most recently loaded SoundFont.
+
+        The engine starts with the default font resident as sfont 1, so a font
+        loaded afterwards is *not* 1 — selecting a program on 1 would silently
+        pick an instrument from the wrong font. FluidSynth's `fonts` lists one
+        "<id> <path>" row per font; take the highest id.
+
+        Falls back to 1 if the output can't be parsed, which is the behaviour
+        this replaces — a wrong instrument beats a crash.
+        """
+        raw = self._socket.send_command("fonts")
+        ids = []
+        for line in (raw or "").splitlines():
+            head = line.strip().split(None, 1)
+            if head and head[0].isdigit():
+                ids.append(int(head[0]))
+        return max(ids) if ids else 1
+
     def select_preset(
         self, channel: int, sfont_id: int, bank: int, preset: int
     ) -> None:

@@ -2,7 +2,7 @@
 Engine layer: one uniform interface over every audio engine.
 
 Each engine is either:
-  - a ProcessEngine  — backed by a systemd unit (fluidsynth, setBfree, pianoteq).
+  - a ProcessEngine  — backed by a systemd unit (fluidsynth, pianoteq).
     start()/stop() are `systemctl start/stop`; RT priority + core pinning come
     from the unit file, never from Python.
   - a ModHostEngine  — an LV2 plugin in mod-host (sfizz, dexed). mod-host is
@@ -14,7 +14,7 @@ Reality-driven divergence from the design doc: sfizz and dexed are NOT separate
 engines. They share mod-host's single plugin slot and its stable JACK ports, so
 one ModHostEngine handles both — switching between them is an in-place plugin
 swap (`load`), not a JACK re-patch. The manager decides in-place-reload vs. full
-switch by comparing `Engine.key` (fluidsynth|setbfree|pianoteq|modhost).
+switch by comparing `Engine.key` (fluidsynth|pianoteq|modhost).
 
 A live engine's JACK ports are *discovered* through JackGraph (by client + type +
 direction) rather than hardcoded, so this adapts to the names engines actually
@@ -34,27 +34,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from synth_ui.clients.jack_graph import JackGraph
+from synth_ui.clients.lv2 import MODHOST_ENGINES
 from synth_ui.clients.mod_host_client import ModHostClient
+from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.synth_client import FluidSynthController
 from synth_ui.clients.voice import Voice
 from synth_ui.config import SOUNDFONT_DIR
 
 logger = logging.getLogger(__name__)
-
-# engine -> (plugin URI, LV2 patch-property URI for its instrument file).
-# The instrument file is an atom-based patch:writable property, loaded via
-# mod-host `patch_set` — NOT a control port (param_set silently no-ops). The
-# sfizz values are confirmed on hardware (jack_lsp / mod-host logs). Verify plugin
-# URIs with `lv2ls`.
-_MODHOST_PLUGINS: dict[str, tuple[str, str]] = {
-    "sfizz": (
-        "http://sfztools.github.io/sfizz",
-        "http://sfztools.github.io/sfizz:sfzfile",
-    ),
-    # TODO(dexed): unbuilt, and its .syx-load property URI is unverified on
-    # hardware. Empty file-property => plugin loads but no cartridge is set.
-    "dexed": ("https://asb2m10.github.io/dexed", ""),
-}
 
 # Runs `sudo systemctl <action> <unit>` and returns the exit code. Injectable so
 # tests don't shell out.
@@ -84,6 +71,9 @@ class EngineContext:
     jack: JackGraph
     mod_host: ModHostClient
     fluidsynth: FluidSynthController
+    # Which mod-host instance holds which instrument. Shared across engines and
+    # across switches, which is what lets plugins stay loaded (see slots.py).
+    slots: InstrumentSlots
     systemctl: Systemctl = _default_systemctl
     # EngineManager wires this to "the effects rack is non-empty" once it owns
     # one. Lets ModHostEngine.stop() leave mod-host.service running when
@@ -181,23 +171,31 @@ class FluidSynthEngine(ProcessEngine):
         if not voice.path:
             return True
         # The startup soundfont is already resident as sfont 1 for the life of
-        # the process, so switching to the default voice is just a preset select,
+        # the process, so switching to a voice from it is just a preset select,
         # NOT a second (multi-hundred-MB) reload off the SD card. This is what
-        # makes "General MIDI" switch quickly instead of re-reading the whole
-        # font that fluidsynth already loaded at start.
+        # makes these voices switch quickly instead of re-reading a font that
+        # fluidsynth already has loaded.
         if _same_file(voice.path, _DEFAULT_SOUNDFONT):
-            self.ctx.fluidsynth.select_preset(0, 1, 0, 0)
+            self._select(voice, sfont_id=1)
             return True
-        return self.ctx.fluidsynth.load_soundfont(voice.path)
+        if not self.ctx.fluidsynth.load_soundfont(voice.path):
+            return False
+        # A freshly loaded font becomes the highest-numbered sfont; the client
+        # reports it, and load_soundfont already selects program 0 of it. Only
+        # re-select when this voice wants a specific instrument.
+        if voice.program >= 0:
+            self._select(voice, sfont_id=self.ctx.fluidsynth.current_sfont_id())
+        return True
+
+    def _select(self, voice: Voice, sfont_id: int) -> None:
+        """Pick the instrument inside the soundfont. One .sf2 holds up to 128
+        programs per bank, so this is what makes a GM font a *library* of voices
+        (Rhodes, Wurlitzer, drawbar organ, synth brass) rather than one entry."""
+        bank, program = voice.bank, max(0, voice.program)
+        self.ctx.fluidsynth.select_preset(0, sfont_id, bank, program)
 
     def panic(self) -> None:
         self.ctx.fluidsynth.reset()
-
-
-class SetBfreeEngine(ProcessEngine):
-    key = "setbfree"
-    jack_client = "setBfree"
-    unit = "setbfree.service"
 
 
 class PianoteqEngine(ProcessEngine):
@@ -212,38 +210,52 @@ _MOD_HOST_START_TIMEOUT = 10.0
 
 
 class ModHostEngine(Engine):
-    """sfizz + dexed: LV2 plugins hosted in mod-host. They share one plugin slot
-    (instance 0) and mod-host's stable JACK ports, so switching between them is
-    an in-place plugin swap, never a JACK re-patch.
+    """Any LV2 instrument hosted in mod-host.
 
-    mod-host itself is on-demand here (started/stopped like any ProcessEngine's
-    unit), not always-running: hardware validation showed mod-host sitting on
-    core 2 alongside another active instrument engine (e.g. fluidsynth) causes
-    continuous JACK XRuns even fully idle, since core 2 only has RT budget for
-    one resident engine at a time."""
+    Which plugin comes from the voice, not from a table here: `engine:
+    "modhost"` plus a `uri` is enough, so a new LV2 instrument is a voices.json
+    edit. (`sfizz`/`dexed` still name their engine instead of a URI; see
+    lv2.PLUGIN_SPECS.)
+
+    **Instruments stay loaded.** Each voice gets its own mod-host instance via
+    InstrumentSlots and keeps it, so switching between two already-loaded voices
+    costs a bypass flip and a JACK re-patch rather than an instantiate. That's
+    the whole reason for consolidating instruments into one LV2 host. Only large
+    sample libraries (`resident: false`) share a scratch slot and reload.
+
+    Because the ports of an inactive instrument now *persist*, the manager can
+    no longer rely on teardown dropping their connections — see
+    EngineManager._switch_to.
+    """
 
     key = "modhost"
-    jack_client = "mod-host"      # MIDI arrives at the shared mod-host:midi_in
+    jack_client = "mod-host"
     unit = "mod-host.service"
-    _instance = 0
 
     def __init__(self, voice: Voice, ctx: EngineContext):
         super().__init__(voice, ctx)
-        self._loaded_uri: str | None = None
+        self._instance: int | None = None
+
+    @property
+    def instance(self) -> int | None:
+        return self._instance
 
     @property
     def audio_client(self) -> str:
         # mod-host registers each plugin instance's ports under a per-instance
         # client "effect_<instance>" (confirmed on hardware via jack_lsp).
+        # Unresolved slot -> a name that matches nothing, so port discovery
+        # returns empty rather than silently matching another instrument.
+        if self._instance is None:
+            return "effect_unallocated"
         return f"effect_{self._instance}"
 
     @property
     def midi_port(self) -> str | None:
-        # sfizz/dexed receive MIDI on the plugin instance's own atom/control port
-        # (effect_<instance>:control), NOT the shared mod-host:midi_in — mod-host
-        # does not forward its midi_in into the hosted plugin here, so wiring the
-        # keyboard to mod-host:midi_in was a silent dead end. Confirmed on
-        # hardware: connecting to effect_0:control is what makes notes sound.
+        # An LV2 instrument receives MIDI on its instance's own atom/control
+        # port (effect_<n>:control), NOT the shared mod-host:midi_in — mod-host
+        # does not forward its midi_in into the hosted plugin, so wiring the
+        # keyboard there was a silent dead end. Confirmed on hardware.
         ports = self.ctx.jack.ports(
             client=self.audio_client, type="midi", is_output=False
         )
@@ -251,66 +263,51 @@ class ModHostEngine(Engine):
 
     def start(self) -> None:
         _systemctl_unit(self.ctx, "start", self.unit)
-        self._load_plugin_with_retry(self.voice)
+        self._acquire_with_retry(self.voice)
 
     def stop(self, timeout: float = 2.0) -> None:
-        self.ctx.mod_host.remove_plugin(self._instance)
-        self._loaded_uri = None
-        # Leave mod-host running if the effects rack still needs it (e.g.
-        # switching sfizz -> fluidsynth with effects loaded) -- otherwise
-        # stopping the process would kill every loaded effect too, not just
-        # this instrument's own instance-0 slot.
-        if not self.ctx.mod_host_needed():
-            _systemctl_unit(self.ctx, "stop", self.unit)
+        """Bypass rather than unload: the plugin stays resident so switching
+        back is instant. mod-host itself always keeps running — it hosts the
+        master chain and the effects rack, not just this instrument."""
+        if self._instance is not None:
+            self.ctx.mod_host.bypass(self._instance, True)
 
-    def _load_plugin_with_retry(
+    def load(self, voice: Voice) -> bool:
+        """Switch this engine to `voice`, reusing its slot if already loaded."""
+        instance = self.ctx.slots.acquire(voice)
+        if instance is None:
+            return False
+        self._instance = instance
+        self.ctx.slots.activate(instance)
+        return True
+
+    def _acquire_with_retry(
         self, voice: Voice, timeout: float = _MOD_HOST_START_TIMEOUT
     ) -> bool:
-        """A freshly-started mod-host accepts TCP connections before it's done
-        initializing (LV2 plugin world scan), so the first add can bounce with an
-        error or get no response at all. Retry the load itself, not just the
-        socket connect, until mod-host is actually ready to host a plugin."""
+        """A freshly-started mod-host accepts TCP connections before it has
+        finished its LV2 world scan, so the first add can bounce with an error
+        or get no response at all. Retry the load itself, not just the socket
+        connect, until mod-host is actually ready to host a plugin."""
         deadline = time.monotonic() + timeout
         while True:
-            if self._ensure_plugin(voice):
+            if self.load(voice):
                 return True
             if time.monotonic() >= deadline:
                 logger.error("mod-host did not become ready within %.1fs", timeout)
                 return False
             time.sleep(0.2)
 
-    def load(self, voice: Voice) -> bool:
-        if not self._ensure_plugin(voice):
-            return False
-        _, file_property = _MODHOST_PLUGINS[voice.engine]
-        if not voice.path or not file_property:
-            return True
-        # The instrument file is an LV2 patch property (atom), set via patch_set.
-        # param_set can't reach it — that was why sfizz loaded but stayed on its
-        # default instrument (silent). No quotes: mod-host takes the rest of the
-        # line as the value.
-        return self.ctx.mod_host.patch_set(self._instance, file_property, voice.path)
-
-    def _ensure_plugin(self, voice: Voice) -> bool:
-        """Load the plugin for this voice, swapping the current one if different."""
-        uri, _ = _MODHOST_PLUGINS[voice.engine]
-        if self._loaded_uri == uri:
-            return True
-        self.ctx.mod_host.remove_plugin(self._instance)  # clear any current plugin
-        if not self.ctx.mod_host.load_plugin(uri, self._instance):
-            logger.error("mod-host failed to load %s (%s)", voice.engine, uri)
-            self._loaded_uri = None
-            return False
-        self._loaded_uri = uri
-        return True
-
 
 # engine string (from voices.json) -> Engine class. A new engine is one class +
 # one entry; the manager and UI never change.
 ENGINE_REGISTRY: dict[str, type[Engine]] = {
     "fluidsynth": FluidSynthEngine,
-    "setbfree": SetBfreeEngine,
     "pianoteq": PianoteqEngine,
-    "sfizz": ModHostEngine,
-    "dexed": ModHostEngine,
+    # Every name that resolves to an LV2 plugin — `modhost` plus each alias in
+    # lv2.PLUGIN_SPECS (sfizz, dexed, fluida) — is played by mod-host. Derived
+    # from the same set voice validation uses, rather than listed by hand: a
+    # hand-kept list omitted `fluida`, so soundfont voices validated as usable,
+    # then failed to load with "unknown engine" while the previous voice kept
+    # sounding.
+    **dict.fromkeys(MODHOST_ENGINES, ModHostEngine),
 }

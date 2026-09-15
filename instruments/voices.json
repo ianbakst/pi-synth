@@ -1,38 +1,72 @@
 [
   {
-    "name": "LivingRoom Upright",
-    "engine": "sfizz",
-    "path": "/home/synth/instruments/piano/livingroom/livingroom-upright.sfz",
-    "category": "Piano"
+    "name": "Rhodes EP",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/EPiano",
+    "category": "Electric Piano",
+    "resident": true
   },
   {
-    "name": "Piano in 162",
-    "engine": "sfizz",
-    "path": "/home/synth/instruments/piano/piano-in-162/piano-in-162.sfz",
-    "category": "Piano"
+    "name": "DX10 FM",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/DX10",
+    "category": "Electric Piano",
+    "resident": true
+  },
+  {
+    "name": "MDA Piano",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/Piano",
+    "category": "Piano",
+    "resident": true
   },
   {
     "name": "Hammond B3",
-    "engine": "setbfree",
-    "path": "",
-    "category": "Organ"
+    "engine": "modhost",
+    "uri": "http://gareus.org/oss/lv2/b_synth",
+    "category": "Organ",
+    "resident": true
   },
   {
-    "name": "DX7 E.Piano",
-    "engine": "dexed",
-    "path": "/home/synth/instruments/dx7/rom1a.syx",
-    "category": "Electric Piano"
+    "name": "Combo Organ",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/Combo",
+    "category": "Organ",
+    "resident": true
   },
   {
-    "name": "DX7 Bass",
-    "engine": "dexed",
-    "path": "/home/synth/instruments/dx7/rom1b.syx",
-    "category": "Electric Piano"
+    "name": "Calf Organ",
+    "engine": "modhost",
+    "uri": "http://calf.sourceforge.net/plugins/Organ",
+    "category": "Organ",
+    "resident": true
   },
   {
-    "name": "General MIDI",
-    "engine": "fluidsynth",
-    "path": "/home/synth/soundfonts/default.sf2",
-    "category": "General MIDI"
+    "name": "JX10 Analog",
+    "engine": "modhost",
+    "uri": "http://drobilla.net/plugins/mda/JX10",
+    "category": "Synth",
+    "resident": true
+  },
+  {
+    "name": "Calf Monosynth",
+    "engine": "modhost",
+    "uri": "http://calf.sourceforge.net/plugins/Monosynth",
+    "category": "Synth",
+    "resident": true
+  },
+  {
+    "name": "Calf Wavetable",
+    "engine": "modhost",
+    "uri": "http://calf.sourceforge.net/plugins/Wavetable",
+    "category": "Synth",
+    "resident": true
+  },
+  {
+    "name": "Salamander Grand",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/salamander/SalamanderGrandPiano.sfz",
+    "category": "Piano",
+    "resident": false
   }
 ]

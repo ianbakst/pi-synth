@@ -58,7 +58,23 @@ There are THREE independent components that must run as separate processes:
   - Uses `dtoverlay=hifiberry-dac`
   - ALSA device: `hw:sndrpihifiberry` (by name, not number — number can shift at boot)
 - **Display:** 3.5" touchscreen, 800×480, ft5x06 controller at `/dev/input/event4`
-- **MIDI:** USB MIDI keyboard, ALSA sequencer client (number varies)
+- **MIDI:** two inputs, both bridged into JACK (see docs/engine-architecture.md,
+  "MIDI ingress")
+  - USB MIDI keyboard, ALSA sequencer client (number varies) → `a2jmidid`.
+    **The Roland FP-10 must have its Bluetooth turned OFF** (hold `[FUNCTION]`,
+    press the Bluetooth key — see its reference manual's key chart). With
+    Bluetooth on, the piano batches its USB MIDI into clumps of ~14 messages
+    arriving every ~2 s, which presents as seconds of latency and notes
+    vanishing during fast passages. It is the piano's firmware, not this Pi:
+    measured with `tools/midi_latency.py` against a Pico on the same USB
+    controller, which delivered 1.0 notes per read and 500 of 500 notes at 25
+    notes/sec. See hardware/midi-tester/README.md.
+    Beware: the FP-10's Memory Backup does **not** list Bluetooth among the
+    settings it persists, so check the setting survives a power cycle.
+  - 5-pin DIN **MIDI IN** on UART0 RX, GPIO15 (pin 10), 31250 baud → `ttymidi`.
+    IN only; GPIO14/TXD0 is unused. Needs `dtparam=uart0=on` on CM5 (on Pi 4
+    `dtoverlay=disable-bt` does it), and the kernel serial console must be kept
+    off those pins — see Boot Configuration below.
 - **User account:** `synth`
 
 ## Boot Configuration
@@ -74,10 +90,26 @@ dtparam=audio=off
 
 NOTE: `display_auto_detect=0` was removed because it disabled the touchscreen.
 
+On CM5, additionally:
+```
+dtparam=uart0=on
+```
+This enables UART0/ttyAMA0 on GPIO14/15 for the DIN MIDI IN jack. Bluetooth is
+irrelevant here — on BCM2712 it has its own UART, so `dtoverlay=disable-bt` does
+nothing for these pins (it only frees them on pre-Pi-5 boards). Do **not** also
+load `dtoverlay=midi-uart0-pi5`: it skews the UART clock so a *requested* 38400
+lands on 31250, and `ttymidi.service` already asks for a true 31250.
+
 ### /boot/firmware/cmdline.txt (appended to existing line):
 ```
 isolcpus=1,2,3 nohz_full=1,2,3 rcu_nocbs=1,2,3
 ```
+
+`console=serial0,115200` must be **removed** from this line (pi-gen's base
+cmdline ships it). `serial0` is UART0 — the MIDI pins — so leaving it there puts
+kernel boot output at 115200 and a systemd-generated `serial-getty` login prompt
+on top of the incoming MIDI stream. Removing the `console=` argument is also what
+removes that getty; no separate mask is needed.
 
 ## System Tuning Already Applied
 

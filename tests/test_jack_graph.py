@@ -1,26 +1,38 @@
 """Tests for JackGraph — driven by a fake runner that emits canned jack_lsp
 output, so no JACK server is needed."""
 
+import pytest
+
 from synth_ui.clients.jack_graph import JackGraph
 
 # A realistic graph: fluidsynth (audio out -> DAC, midi in <- keyboard) running,
 # mod-host present but its audio NOT wired to the DAC (the gap Phase 2 fixes).
 KBD = "a2j:Keystation 61 [24] (capture): Keystation 61 MIDI 1"
 KBD_PB = "a2j:Keystation 61 [24] (playback): Keystation 61 MIDI 1"
+# The 5-pin DIN jack on UART0, bridged by ttymidi. A different client and a
+# different naming scheme than a2j's, but the same physical+terminal claim.
+DIN = "ttymidi:MIDI_in"
+DIN_OUT = "ttymidi:MIDI_out"
+# a2jmidid running without -e would export ALSA's software loopback under the
+# same client as the real keyboard — same prefix, but not physical.
+SOFT_MIDI = "a2j:Midi Through [14] (capture): Midi Through Port-0"
 
 PORTS = [
-    # (name, type, is_output)
-    ("system:capture_1", "audio", True),
-    ("system:playback_1", "audio", False),
-    ("system:playback_2", "audio", False),
-    (KBD, "midi", True),
-    (KBD_PB, "midi", False),
-    ("fluidsynth-01:left", "audio", True),
-    ("fluidsynth-01:right", "audio", True),
-    ("fluidsynth-01:midi_00", "midi", False),
-    ("mod-host:midi_in", "midi", False),
-    ("mod-host:audio_out_1", "audio", True),
-    ("mod-host:audio_out_2", "audio", True),
+    # (name, type, is_output, is_physical)
+    ("system:capture_1", "audio", True, True),
+    ("system:playback_1", "audio", False, True),
+    ("system:playback_2", "audio", False, True),
+    (KBD, "midi", True, True),
+    (KBD_PB, "midi", False, True),
+    (DIN, "midi", True, True),
+    (DIN_OUT, "midi", False, True),
+    (SOFT_MIDI, "midi", True, False),
+    ("fluidsynth-01:left", "audio", True, False),
+    ("fluidsynth-01:right", "audio", True, False),
+    ("fluidsynth-01:midi_00", "midi", False, False),
+    ("mod-host:midi_in", "midi", False, False),
+    ("mod-host:audio_out_1", "audio", True, False),
+    ("mod-host:audio_out_2", "audio", True, False),
 ]
 
 CONNECTIONS = [
@@ -32,28 +44,30 @@ CONNECTIONS = [
 
 def build_runner(ports=PORTS, connections=CONNECTIONS, *, connect_rc=0):
     """Return a runner emulating jack_lsp/jack_connect/jack_disconnect."""
-    adj: dict[str, list[str]] = {name: [] for name, _, _ in ports}
+    adj: dict[str, list[str]] = {name: [] for name, _, _, _ in ports}
     for a, b in connections:
         adj.setdefault(a, []).append(b)
         adj.setdefault(b, []).append(a)
 
     def lsp_t() -> str:
         lines = []
-        for name, t, _ in ports:
+        for name, t, _, _ in ports:
             desc = "32 bit float mono audio" if t == "audio" else "8 bit raw midi"
             lines += [name, f"\t{desc}"]
         return "\n".join(lines) + "\n"
 
     def lsp_p() -> str:
         lines = []
-        for name, _, is_out in ports:
+        for name, _, is_out, is_phys in ports:
             flags = "output" if is_out else "input"
-            lines += [name, f"\tproperties: {flags},physical,terminal,"]
+            if is_phys:
+                flags += ",physical,terminal"
+            lines += [name, f"\tproperties: {flags},"]
         return "\n".join(lines) + "\n"
 
     def lsp_c() -> str:
         lines = []
-        for name, _, _ in ports:
+        for name, _, _, _ in ports:
             lines.append(name)
             lines += [f"\t{c}" for c in adj.get(name, [])]
         return "\n".join(lines) + "\n"
@@ -86,6 +100,10 @@ def test_snapshot_parses_type_direction_connections():
     assert snap[KBD].is_output is True                     # a source
     assert "fluidsynth-01:midi_00" in snap[KBD].connections
     assert snap["fluidsynth-01:left"].client == "fluidsynth-01"
+    # physical: a real jack on the box vs. a port an engine registered
+    assert snap[KBD].is_physical is True
+    assert snap[DIN].is_physical is True
+    assert snap["fluidsynth-01:left"].is_physical is False
 
 
 def test_ports_filtering_matches_client_prefix_and_type_and_direction():
@@ -104,9 +122,18 @@ def test_ports_filtering_matches_client_prefix_and_type_and_direction():
     ]
 
 
-def test_keyboard_sources_and_dac_sinks():
+def test_keyboard_sources_span_transports_and_exclude_software_ports():
+    # Ingress is "physical MIDI source", not "client a2j": the USB keyboard and
+    # the DIN jack both qualify, from different bridges. Excluded: the playback
+    # (sink) sides, and a2j's non-physical software loopback — which shares the
+    # keyboard's client prefix, so only the flag distinguishes them.
     g = JackGraph(build_runner())
-    assert g.keyboard_midi_sources() == [KBD]              # capture only, not playback
+    assert g.keyboard_midi_sources() == [KBD, DIN]
+    assert SOFT_MIDI not in g.keyboard_midi_sources()
+
+
+def test_dac_sinks():
+    g = JackGraph(build_runner())
     assert g.dac_sinks() == ["system:playback_1", "system:playback_2"]
 
 
@@ -151,3 +178,48 @@ def test_empty_graph_off_pi_is_safe():
     assert g.keyboard_midi_sources() == []
     assert g.dac_sinks() == []
     assert g.connect("a", "b") is False
+
+
+# --- client matching: numbered mod-host instances must not collide ----------
+
+from synth_ui.clients.jack_graph import Port, _client_matches  # noqa: E402
+
+
+def _graph():
+    return JackGraph(runner=lambda cmd: (0, ""))
+
+
+def test_instance_9_does_not_match_the_limiter_at_90():
+    # The scratch slot is effect_9; the master-chain limiter is effect_90. A
+    # prefix match wired the keyboard into the limiter, and the instrument got
+    # no notes while the previous voice kept sounding.
+    snap = {
+        "effect_9:control": Port("effect_9:control", "midi", False),
+        "effect_90:events_in": Port("effect_90:events_in", "midi", False),
+    }
+    got = _graph().ports(client="effect_9", type="midi", is_output=False, snapshot=snap)
+    assert got == ["effect_9:control"]
+
+
+def test_instance_1_does_not_match_the_effects_rack():
+    snap = {
+        "effect_1:out": Port("effect_1:out", "audio", True),
+        "effect_10:out_l": Port("effect_10:out_l", "audio", True),
+        "effect_11:out_l": Port("effect_11:out_l", "audio", True),
+    }
+    got = _graph().ports(client="effect_1", type="audio", is_output=True, snapshot=snap)
+    assert got == ["effect_1:out"]
+
+
+@pytest.mark.parametrize("actual,wanted,expected", [
+    ("fluidsynth", "fluidsynth", True),
+    ("fluidsynth-01", "fluidsynth", True),   # JACK's second-instance suffix
+    ("FluidSynth", "fluidsynth", True),      # case-insensitive
+    ("effect_9", "effect_9", True),
+    ("effect_90", "effect_9", False),
+    ("effect_10", "effect_1", False),
+    ("system", "system", True),
+    ("systemd", "system", False),
+])
+def test_client_matching_stops_at_a_separator(actual, wanted, expected):
+    assert _client_matches(actual, wanted) is expected

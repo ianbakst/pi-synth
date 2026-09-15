@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 from synth_ui.clients.effects_rack import EffectsRack
+from synth_ui.clients.rig import RigEffect, plan
 
 # Canned audio ports for effect instances 10 and 11 (per-instance JACK clients).
 PORTS = {
@@ -109,3 +110,51 @@ def test_add_returns_none_and_stays_empty_on_load_failure():
     rack = EffectsRack(FakeJack(), _mh(load=False))
     assert rack.add("urn:x") is None
     assert rack.is_empty()
+
+
+# --- applying a rig's chain (diff, not rebuild) -----------------------------
+
+def test_apply_reuses_shared_effects_and_loads_only_the_new_one():
+    jack = FakeJack(ports=PORTS)
+    mh = MagicMock()
+    mh.load_plugin.return_value = True
+    rack = EffectsRack(jack, mh)
+    assert rack.add("urn:a") == 10
+    mh.reset_mock()
+
+    target = [RigEffect("urn:a"), RigEffect("urn:b", {"mix": 0.4})]
+    assert rack.apply(plan(rack.snapshot(), target)) is True
+    # urn:a kept at its instance; only urn:b instantiated
+    mh.load_plugin.assert_called_once_with("urn:b", 11)
+    mh.remove_plugin.assert_not_called()
+    mh.set_param.assert_called_once_with(11, "mix", "0.4")
+    assert rack.snapshot() == [(10, "urn:a"), (11, "urn:b")]
+
+
+def test_apply_unloads_effects_the_rig_does_not_use():
+    rack = EffectsRack(FakeJack(ports=PORTS), _mh())
+    rack.add("urn:a")
+    rack.apply(plan(rack.snapshot(), []))
+    assert rack.is_empty()
+
+
+def test_apply_reorders_without_reloading():
+    mh = _mh()
+    rack = EffectsRack(FakeJack(ports=PORTS), mh)
+    rack.add("urn:a")
+    rack.add("urn:b")
+    mh.reset_mock()
+    rack.apply(plan(rack.snapshot(), [RigEffect("urn:b"), RigEffect("urn:a")]))
+    mh.load_plugin.assert_not_called()
+    mh.remove_plugin.assert_not_called()
+    assert rack.snapshot() == [(11, "urn:b"), (10, "urn:a")]
+
+
+def test_apply_reuses_freed_slots():
+    rack = EffectsRack(FakeJack(ports=PORTS), _mh())
+    rack.add("urn:a")
+    rack.add("urn:b")
+    # drop the first, add a third: the freed slot 10 is reused rather than
+    # numbering climbing towards the master chain at 90
+    rack.apply(plan(rack.snapshot(), [RigEffect("urn:b"), RigEffect("urn:c")]))
+    assert sorted(i for i, _ in rack.snapshot()) == [10, 11]

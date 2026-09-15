@@ -11,8 +11,13 @@ PartOf=jack.service
 [Service]
 Type=simple
 User=synth
-# -e / --export-hw: export only physical (hardware) MIDI ports, not software
-# ALSA-seq clients like FluidSynth or Midi Through.
+# -e / --export-hw is opt-IN for hardware ports, not a restriction to them:
+# without it a2jmidid *skips* hardware ports (port_thread.c: "Ignoring hardware
+# port"), which is the opposite of what we want — USB keyboards are exactly the
+# ports we need. It does not suppress software ALSA-seq clients; "Midi Through"
+# and friends still get exported alongside. That's fine: they aren't marked
+# JackPortIsPhysical, and JackGraph.keyboard_midi_sources() selects on the
+# physical flag, so only real jacks are ever wired to an engine.
 # Pinned to core 1 with JACK (it's light — sparse MIDI events, not DSP).
 ExecStart=/usr/bin/taskset -c 1 /usr/bin/a2jmidid -e
 Restart=always

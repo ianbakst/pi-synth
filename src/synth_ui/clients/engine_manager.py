@@ -16,6 +16,9 @@ select_preset / set_gain / is_connected).
 """
 
 import logging
+import math
+import re
+import time
 
 from synth_ui.clients.audio_devices import AudioDevices, Card
 from synth_ui.clients.constants import (
@@ -28,10 +31,14 @@ from synth_ui.clients.constants import (
 from synth_ui.clients.effects_rack import Effect, EffectsRack
 from synth_ui.clients.engine import ENGINE_REGISTRY, Engine, EngineContext
 from synth_ui.clients.jack_graph import JackGraph
+from synth_ui.clients.lv2 import ControlPort, control_ports
+from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
+from synth_ui.clients.rig import Rig, plan
+from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.synth_client import FluidSynthController, Preset
 from synth_ui.clients.voice import Voice
-from synth_ui.config import AUDIO_DEVICE_FILE
+from synth_ui.config import AUDIO_DEVICE_FILE, MASTER_CHAIN, MAX_GAIN
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,32 @@ _MOD_HOST_PORT = 5555
 _READY_TIMEOUT = 6.0
 # How long to wait for jack + mod-host to come back after a card-change restart.
 _AUDIO_STACK_TIMEOUT = 10.0
+_MOD_HOST_UNIT = "mod-host.service"
+# Budget for mod-host to finish its LV2 world scan and accept plugin adds.
+_MOD_HOST_START_TIMEOUT = 10.0
+
+# Volume floor: the slider's bottom means silence, not a very small gain.
+_SILENCE_DB = -60.0
+
+
+def _gain_to_db(gain: float) -> float:
+    """Volume slider position (0..MAX_GAIN) -> dB on the master chain.
+
+    The top of the slider is 0 dB, never above. The volume stage sits AFTER the
+    limiter, so a positive value isn't "louder" — it's past full scale, clipping
+    at the DAC where the limiter can't help. The old mapping put unity at 20% of
+    the slider's travel, so the top four-fifths were all clipping (moving it
+    changed nothing audible) and every useful setting was crammed into the
+    bottom fifth.
+
+    Square-law taper (40*log10 rather than 20*log10): hearing is roughly
+    logarithmic, so a linear-in-amplitude slider bunches all the audible change
+    at the bottom. This spreads it: 50% is -12 dB, 25% is -24 dB.
+    """
+    ratio = max(0.0, min(1.0, gain / MAX_GAIN))
+    if ratio <= 0:
+        return _SILENCE_DB
+    return max(_SILENCE_DB, 40.0 * math.log10(ratio))
 
 
 class EngineManager:
@@ -52,6 +85,7 @@ class EngineManager:
         mod_host_host: str = LOCALHOST,
         mod_host_port: int = _MOD_HOST_PORT,
         audio_device_file: str = AUDIO_DEVICE_FILE,
+        start_timeout: float = _MOD_HOST_START_TIMEOUT,
     ):
         self._fluidsynth = FluidSynthController(
             host=fluidsynth_host,
@@ -62,15 +96,39 @@ class EngineManager:
         )
         self._mod_host = ModHostClient(host=mod_host_host, port=mod_host_port)
         self._jack = JackGraph()
+        # Instrument plugins stay loaded across switches; this owns which
+        # instance holds what (see slots.py). Shared by every ModHostEngine, so
+        # it has to outlive them — the manager owns it, not the engine.
+        self._slots = InstrumentSlots(self._mod_host)
         self._ctx = EngineContext(
-            jack=self._jack, mod_host=self._mod_host, fluidsynth=self._fluidsynth
+            jack=self._jack,
+            mod_host=self._mod_host,
+            fluidsynth=self._fluidsynth,
+            slots=self._slots,
+        )
+        # The master chain is the permanent tail: everything — every instrument
+        # and the whole effects rack — feeds through it into the DAC. It carries
+        # per-voice level trim and the output limiter (see master_chain.py).
+        self._master = MasterChain(
+            self._jack,
+            self._mod_host,
+            [MasterStage(**stage) for stage in MASTER_CHAIN],
         )
         # Effects share the instrument mod-host's own client/process (never a
         # second one — see effects_rack.py and docs/engine-architecture.md
-        # "Effects rack"). mod_host_needed keeps ModHostEngine.stop() from
-        # killing the rack when switching to a non-mod-host instrument.
-        self._effects = EffectsRack(self._jack, self._mod_host)
-        self._ctx.mod_host_needed = lambda: not self._effects.is_empty()
+        # "Effects rack"). Their tail feeds the master chain, not the DAC.
+        self._effects = EffectsRack(
+            self._jack, self._mod_host, sink=sink_for(self._master, self._jack)
+        )
+        # mod-host now hosts the master chain, so it must stay up for the whole
+        # session — never stopped when switching away from a mod-host
+        # instrument. Stopping it would take the master chain (and the rack)
+        # down with the instrument.
+        self._ctx.mod_host_needed = lambda: True
+        self._volume_db = 0.0
+        self._rig_trim_db = 0.0
+        self._started = False
+        self._start_timeout = start_timeout
         self._audio = AudioDevices()
         self._audio_device_file = audio_device_file
         self._registry = ENGINE_REGISTRY  # overridable in tests
@@ -80,22 +138,122 @@ class EngineManager:
     # Public API (UI contract — unchanged)
     # ------------------------------------------------------------------
 
+    def start(self) -> bool:
+        """Bring up the always-on part of the audio graph: mod-host and the
+        master chain. Called once at UI startup, before any voice is loaded, so
+        the master chain's output->DAC leg exists before anything feeds it.
+
+        Idempotent: re-running after a jack restart re-establishes the chain.
+        Also called lazily by load_voice, so the chain exists before anything is
+        routed into it no matter which happens first."""
+        self._started = True
+        self._ctx.systemctl(["sudo", "systemctl", "start", _MOD_HOST_UNIT])
+        self._clear_host()
+        # A freshly-started mod-host accepts TCP before it has finished scanning
+        # the LV2 world, so the first plugin adds can bounce. Retry the load
+        # itself, not just the connect — same race ModHostEngine handles.
+        deadline = time.monotonic() + self._start_timeout
+        while True:
+            if self._master.ensure():
+                return True
+            if time.monotonic() >= deadline:
+                logger.error("master chain did not come up; routing direct to DAC")
+                return False
+            time.sleep(0.2)
+
+    def _clear_host(self) -> None:
+        """Remove every plugin mod-host is holding, so this session starts clean.
+
+        mod-host outlives the UI: `deploy.sh` and any UI crash restart synth-ui
+        but leave mod-host running, still holding the last session's plugins
+        *and their JACK connections*, none of which this session knows about.
+        That surfaced two ways:
+
+          - a stale instrument -> DAC connection from a session where the master
+            chain failed kept feeding the DAC directly, bypassing the volume
+            stage — so the slider "didn't work" on exactly that instrument;
+          - the previous session's limiter still sitting at instance 90, so this
+            session's `add` at 90 is refused and the master chain silently
+            degrades to direct-to-DAC.
+
+        Removing a plugin destroys its JACK client, which drops every
+        connection it had. What's loaded is read from the JACK graph (mod-host
+        registers each instance as client `effect_<n>`), so only instances that
+        actually exist are touched.
+        """
+        instances = sorted({
+            int(m.group(1))
+            for name in self._jack.snapshot()
+            if (m := re.match(r"effect_(\d+):", name))
+        })
+        for instance in instances:
+            self._mod_host.remove_plugin(instance, missing_ok=True)
+        if instances:
+            logger.info("cleared %d stale mod-host instances", len(instances))
+
     def load_voice(self, voice: Voice) -> bool:
         engine_cls = self._registry.get(voice.engine)
         if engine_cls is None:
             logger.error("unknown engine: %s", voice.engine)
             return False
 
-        # Same JACK source already active -> reload in place (no restart, no gap).
+        # The output path has to exist before a voice is wired into it. Once
+        # only — a missing master plugin must not re-run the 10s bring-up on
+        # every voice change.
+        if not self._started:
+            self.start()
+
+        # The voice's measured level offset, so switching instruments doesn't
+        # jump in volume. Applied before the engine makes sound, not after.
+        # Selecting a voice from the catalog leaves whatever rig was loaded, so
+        # its by-ear nudge no longer applies; load_rig re-applies its own.
+        self._rig_trim_db = 0.0
+        self._master.set_trim_db(voice.gain_trim_db)
+
+        # Same engine already active -> switch in place (no restart, no gap).
         if self._active is not None and self._active.key == engine_cls.key:
+            # Capture the outgoing ports *first*: with instruments resident, a
+            # mod-host voice change moves to a different instance whose ports
+            # are different, and the old instance's ports don't disappear —
+            # they'd keep taking MIDI and feeding the sink alongside the new
+            # one. (For fluidsynth the ports are stable and this is a no-op.)
+            prev_midi, prev_outs = self._active.midi_port, self._active.audio_out_ports
             ok = self._active.load(voice)
             self._active.voice = voice
-            # Re-patch (idempotent): covers mod-host recreating a plugin's audio
-            # ports on a sfizz<->dexed swap; a no-op for fluidsynth's stable ports.
-            self._wire(self._active)
+            self._wire(self._active)                        # connect new first,
+            self._unwire(prev_midi, prev_outs, keep=self._active)  # then drop old
             return ok
 
         return self._switch_to(engine_cls, voice)
+
+    def load_rig(self, rig: Rig, voice: Voice) -> bool:
+        """Load a saved rig: its instrument, its effects chain, and its level, as
+        one operation.
+
+        The chain is applied as a *diff* (see rig.plan) rather than rebuilt, so
+        effects shared between the outgoing and incoming rig are re-ordered
+        instead of re-instantiated — the expensive part of a switch.
+
+        Effects first, then the instrument: `load_voice` wires the instrument to
+        whatever is at the head of the chain, so the chain has to be settled
+        before that leg is patched, or the instrument would be connected to an
+        effect that is about to move."""
+        self._effects.apply(plan(self._effects.snapshot(), rig.effects))
+        ok = self.load_voice(voice)
+        # Rig trim sits on top of the voice's calibrated trim: the measured
+        # value matches instruments to each other, the rig value is the by-ear
+        # nudge for this particular sound.
+        self._rig_trim_db = rig.trim_db
+        self._master.set_trim_db(voice.gain_trim_db + rig.trim_db)
+        return ok
+
+    def set_rig_trim(self, db: float) -> None:
+        """The by-ear level nudge for the active rig, on top of its voice's
+        measured `gain_trim_db` (see tools/calibrate_levels). Applied live so
+        it's audible while the slider moves; persistence is the UI's job."""
+        self._rig_trim_db = db
+        voice_trim = self._active.voice.gain_trim_db if self._active else 0.0
+        self._master.set_trim_db(voice_trim + db)
 
     def list_presets(self) -> list[Preset]:
         if self._is_active("fluidsynth"):
@@ -107,13 +265,42 @@ class EngineManager:
             self._fluidsynth.select_preset(channel, sfont_id, bank, prog)
 
     def set_gain(self, gain: float) -> None:
-        # Only FluidSynth exposes gain today; other engines: TODO (JACK volume or
-        # a plugin parameter).
-        if self._is_active("fluidsynth"):
+        """Master volume, in slider units. Applies to every voice — previously
+        this only reached fluidsynth, so most voices had no volume control at
+        all. Summed with the active voice's trim inside the master chain."""
+        self._volume_db = _gain_to_db(gain)
+        self._master.set_volume_db(self._volume_db)
+        if not self._master.is_ready() and self._is_active("fluidsynth"):
+            # No master chain loaded (plugin missing): fall back to the one
+            # engine that has its own gain, so the slider still does something.
             self._fluidsynth.set_gain(gain)
 
     def is_connected(self) -> bool:
         return self._active is not None and self._active.is_ready()
+
+    @property
+    def jack(self) -> JackGraph:
+        """The JACK graph, for tools that need to patch connections of their
+        own (calibrate_levels wires its passage player in by hand)."""
+        return self._jack
+
+    def active_midi_port(self) -> str | None:
+        """The JACK MIDI input of the instrument currently loaded.
+
+        _wire() only ever connects *physical* MIDI sources, which is right for
+        keyboards but means a software sender (the calibration passage player)
+        is never wired up automatically. Tools that need to play into the
+        instrument ask for the port and connect it themselves.
+        """
+        return self._active.midi_port if self._active is not None else None
+
+    def master_output_ports(self) -> list[str]:
+        """Where to record the finished signal: the tail of the master chain,
+        falling back to the active instrument if no master chain is up."""
+        ports = self._master.output_ports()
+        if ports:
+            return ports
+        return self._active.audio_out_ports if self._active is not None else []
 
     # ------------------------------------------------------------------
     # Audio device (which ALSA card JACK opens)
@@ -143,6 +330,15 @@ class EngineManager:
             return False
         if not self._wait_audio_stack():
             return False
+
+        # mod-host cycles with jack (PartOf), so its plugins — the master chain
+        # and every resident instrument — are gone. Drop the stale bookkeeping
+        # and rebuild before re-establishing the voice, or we'd "reuse" slots
+        # that no longer hold anything.
+        self._slots.clear()
+        self._master.teardown()
+        self.start()
+        self._master.set_volume_db(self._volume_db)
 
         if voice is not None:
             return self.load_voice(voice)
@@ -198,12 +394,36 @@ class EngineManager:
         old = self._active
         if old is not None:
             old.panic()
-            # Stopping old removes its JACK ports; jackd drops their connections
-            # automatically, so no explicit disconnect is needed.
+            old_midi, old_outs = old.midi_port, old.audio_out_ports
             old.stop()
+            self._unwire(old_midi, old_outs, keep=new)
 
         self._active = new
         return True
+
+    def _unwire(
+        self, midi_port: str | None, audio_outs: list[str], keep: Engine
+    ) -> None:
+        """Drop the previous instrument's connections.
+
+        This used to be unnecessary: tearing an engine down removed its JACK
+        ports and jackd dropped the edges for us. Instruments now stay loaded
+        (see slots.py), so an inactive mod-host instrument keeps its ports —
+        and without this it would go on receiving the keyboard and feeding the
+        sink, i.e. two instruments sounding at once.
+
+        Ports shared with the incoming engine are left alone, so a switch that
+        lands on the same instance doesn't disconnect what was just wired."""
+        keep_outs = set(keep.audio_out_ports)
+        if midi_port and midi_port != keep.midi_port:
+            for src in self._jack.keyboard_midi_sources():
+                self._jack.disconnect(src, midi_port)
+        sinks = self._sinks()
+        for src in audio_outs:
+            if src in keep_outs:
+                continue
+            for dst in sinks:
+                self._jack.disconnect(src, dst)
 
     def _wire(self, engine: Engine) -> None:
         """Patch keyboard MIDI -> engine, and engine audio -> DAC (or, if the
@@ -218,16 +438,22 @@ class EngineManager:
         else:
             logger.warning("no MIDI input port found for engine '%s'", engine.key)
 
+        # instrument -> rack (if any) -> master (if up) -> DAC. Each stage owns
+        # only its own outgoing leg; this one moves on every instrument switch.
         outs = engine.audio_out_ports
-        if self._effects.is_empty():
-            sinks = self._jack.dac_sinks()
-        else:
-            sinks = self._effects.input_ports()
+        sinks = self._sinks()
         if outs and sinks:
             for src, dst in zip(outs, sinks):
                 self._jack.connect(src, dst)
         else:
             logger.warning("no audio-out/DAC ports to wire for engine '%s'", engine.key)
+
+    def _sinks(self) -> list[str]:
+        """Where the active instrument's audio goes: the head of the effects
+        rack if there is one, otherwise the master chain, otherwise the DAC."""
+        if self._effects.is_empty():
+            return self._master.input_ports() or self._jack.dac_sinks()
+        return self._effects.input_ports()
 
     def _is_active(self, key: str) -> bool:
         return self._active is not None and self._active.key == key
@@ -235,17 +461,22 @@ class EngineManager:
     # ------------------------------------------------------------------
     # Effects rack
     # ------------------------------------------------------------------
-    # v1 scope: effects are only available while a mod-host-hosted instrument
-    # (sfizz/dexed) is active — see effects_available(). mod-host is already
-    # running and warm whenever that's true, so no start/stop lifecycle is
-    # needed here. Running mod-host concurrently with fluidsynth/setBfree on
-    # core 2 is untested and, per prior hardware validation of that same core
-    # with two RT clients on it, plausibly reintroduces the xrun problem
-    # mod-host's on-demand lifecycle exists to avoid — see
-    # docs/engine-architecture.md "Effects rack".
 
     def effects_available(self) -> bool:
-        return self._is_active("modhost")
+        """Effects now work under every voice, not just sfizz/dexed.
+
+        They used to require a mod-host instrument to be active, because
+        mod-host was on-demand and only running in that case — which meant the
+        Hammond and the GM piano could never have reverb. mod-host is always up
+        now (it hosts the master chain), so the rack is always reachable; a
+        process engine's audio simply feeds it over JACK like anything else.
+
+        The reason mod-host was on-demand still stands as a *load* question, not
+        a routing one: two RT clients on core 2 caused continuous xruns on the
+        pi4. That measurement predates the CM5 and is the thing to re-check when
+        a process engine (fluidsynth/setBfree) is active alongside mod-host —
+        see docs/voice-library.md."""
+        return True
 
     def effects(self) -> list[Effect]:
         return self._effects.effects()
@@ -265,6 +496,13 @@ class EngineManager:
         self._effects.clear()
         if self._active is not None:
             self._wire(self._active)
+
+    def set_effect_bypass(self, instance: int, bypassed: bool) -> bool:
+        return self._effects.set_bypass(instance, bypassed)
+
+    def effect_controls(self, uri: str) -> list[ControlPort]:
+        """The knobs this effect exposes, read from the plugin itself."""
+        return control_ports(uri)
 
     def set_effect_param(self, instance: int, symbol: str, value: str) -> bool:
         return self._effects.set_param(instance, symbol, value)

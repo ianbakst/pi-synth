@@ -30,6 +30,8 @@ class Slider(Component):
         max_value: float = 100.0,
         label: str | None = None,
         font: Font | None = None,
+        format_value: Callable[[float], str] | None = None,
+        live: bool = False,
     ):
         super().__init__(rect)
         self.min_value = min_value
@@ -38,8 +40,38 @@ class Slider(Component):
         self.on_change = on_change
         self.label = label
         self.font = font
+        # How the current value reads. Defaults to a percentage of the
+        # range, which is right for volume but nonsense for a bipolar
+        # control -- -3 dB on a -12..+12 slider is not "37%".
+        self.format_value = format_value or (lambda v: f"{int(self._ratio() * 100)}%")
         self.dragging = False
-        self._track = Rect(rect.x + 16, rect.y + 38, rect.width - 32, 24)
+        # Fire on_change during the drag, not only on release. Right for an
+        # effect parameter, where the question is "how much reverb" and the only
+        # way to answer it is to hear the change while making it. Left off by
+        # default: a volume slider that fires per motion event would send a
+        # command per frame.
+        self.live = live
+        self._track = self._track_for(rect)
+
+    @staticmethod
+    def _track_for(rect: Rect) -> Rect:
+        return Rect(rect.x + 16, rect.y + 38, rect.width - 32, 24)
+
+    def move_to(self, x: int, y: int) -> None:
+        """Reposition, keeping the track in step.
+
+        The track is derived from the rect at construction, so moving the rect
+        alone leaves hit-testing and drawing at the old position — which is what
+        a scrolling list of sliders does on every frame.
+        """
+        self.rect.topleft = (x, y)
+        self._track = self._track_for(self.rect)
+
+    @property
+    def track_rect(self) -> Rect:
+        """The draggable band. A list of these needs to tell a drag on the
+        control from a scroll of the list, and the track is that boundary."""
+        return self._track
 
     def _ratio(self) -> float:
         return (self.value - self.min_value) / (self.max_value - self.min_value)
@@ -60,7 +92,7 @@ class Slider(Component):
                 self.font.render(self.label, True, TEXT_SECONDARY),
                 (self.rect.x + 16, self.rect.y + 10),
             )
-            pct = self.font.render(f"{int(self._ratio() * 100)}%", True, TEXT_PRIMARY)
+            pct = self.font.render(self.format_value(self.value), True, TEXT_PRIMARY)
             surface.blit(pct, (self.rect.right - pct.get_width() - 16, self.rect.y + 10))
 
         ratio = self._ratio()
@@ -83,6 +115,8 @@ class Slider(Component):
             case pygame.FINGERMOTION | pygame.MOUSEMOTION:
                 if self.dragging:
                     self.value = self._value_from_x(event.pos[0])
+                    if self.live:
+                        self.on_change(self.value)
                     return True
             case pygame.FINGERUP | pygame.MOUSEBUTTONUP:
                 if self.dragging:

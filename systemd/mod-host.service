@@ -2,14 +2,21 @@
 Description=mod-host LV2 Plugin Host
 After=jack.service
 Requires=jack.service
-# NOT enabled at boot and deliberately NOT PartOf=jack.service: mod-host is an
-# on-demand instrument engine now, started/stopped by EngineManager
-# (ModHostEngine.start/stop) exactly like fluidsynth-engine/setbfree, so it only
-# occupies core 2 while it's actually the active voice. Hardware validation found
-# that mod-host sitting there always-on alongside another core-2 engine (e.g.
-# fluidsynth) causes continuous JACK XRuns even fully idle — two RT clients on one
-# isolated core. PartOf=jack.service would also re-start mod-host on every audio
-# device change regardless of whether it should be running, undoing this.
+# Always-on again, and PartOf=jack.service so it cycles with the server.
+#
+# mod-host was on-demand for a while: hardware validation on the *pi4* found it
+# sitting idle on core 2 alongside another core-2 engine (e.g. fluidsynth) caused
+# continuous JACK XRuns — two RT clients contending for one isolated core. That
+# lifecycle is no longer possible: mod-host hosts the master chain (trim +
+# limiter, clients/master_chain.py), which every voice and every effect feeds
+# through, so stopping it would take the whole output path down with the
+# instrument.
+#
+# The xrun finding still stands as a *load* question — re-measure on the CM5
+# with fluidsynth or setBfree active alongside mod-host. It stops mattering
+# entirely once those two move into mod-host as LV2 plugins (see
+# docs/voice-library.md), which is the direction of travel.
+PartOf=jack.service
 [Service]
 Type=simple
 User=synth
