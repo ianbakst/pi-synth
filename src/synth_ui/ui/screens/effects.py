@@ -28,6 +28,8 @@ class EffectsScreen(Screen):
         on_remove: Callable[[int], None],
         on_add: Callable,
         on_back: Callable,
+        on_bypass: Callable[[int, bool], None] | None = None,
+        on_edit: Callable[[int], None] | None = None,
         on_trim_change: Callable[[float], None] | None = None,
         initial_trim: float = 0.0,
     ):
@@ -51,6 +53,8 @@ class EffectsScreen(Screen):
             font_medium=font_medium,
             font_small=font_small,
             on_remove=on_remove,
+            on_bypass=on_bypass,
+            on_edit=on_edit,
         )
         self.trim_slider = Slider(
             rect=pygame.Rect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H),

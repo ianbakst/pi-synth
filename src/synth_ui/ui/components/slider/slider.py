@@ -31,6 +31,7 @@ class Slider(Component):
         label: str | None = None,
         font: Font | None = None,
         format_value: Callable[[float], str] | None = None,
+        live: bool = False,
     ):
         super().__init__(rect)
         self.min_value = min_value
@@ -44,7 +45,33 @@ class Slider(Component):
         # control -- -3 dB on a -12..+12 slider is not "37%".
         self.format_value = format_value or (lambda v: f"{int(self._ratio() * 100)}%")
         self.dragging = False
-        self._track = Rect(rect.x + 16, rect.y + 38, rect.width - 32, 24)
+        # Fire on_change during the drag, not only on release. Right for an
+        # effect parameter, where the question is "how much reverb" and the only
+        # way to answer it is to hear the change while making it. Left off by
+        # default: a volume slider that fires per motion event would send a
+        # command per frame.
+        self.live = live
+        self._track = self._track_for(rect)
+
+    @staticmethod
+    def _track_for(rect: Rect) -> Rect:
+        return Rect(rect.x + 16, rect.y + 38, rect.width - 32, 24)
+
+    def move_to(self, x: int, y: int) -> None:
+        """Reposition, keeping the track in step.
+
+        The track is derived from the rect at construction, so moving the rect
+        alone leaves hit-testing and drawing at the old position — which is what
+        a scrolling list of sliders does on every frame.
+        """
+        self.rect.topleft = (x, y)
+        self._track = self._track_for(self.rect)
+
+    @property
+    def track_rect(self) -> Rect:
+        """The draggable band. A list of these needs to tell a drag on the
+        control from a scroll of the list, and the track is that boundary."""
+        return self._track
 
     def _ratio(self) -> float:
         return (self.value - self.min_value) / (self.max_value - self.min_value)
@@ -88,6 +115,8 @@ class Slider(Component):
             case pygame.FINGERMOTION | pygame.MOUSEMOTION:
                 if self.dragging:
                     self.value = self._value_from_x(event.pos[0])
+                    if self.live:
+                        self.on_change(self.value)
                     return True
             case pygame.FINGERUP | pygame.MOUSEBUTTONUP:
                 if self.dragging:

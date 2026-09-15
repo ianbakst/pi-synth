@@ -4,7 +4,11 @@ import threading
 import pygame
 
 from synth_ui.clients import EngineManager, Preset
-from synth_ui.clients.effects_catalog import EffectCatalogEntry, read_effects_manifest
+from synth_ui.clients.effects_catalog import (
+    EffectCatalogEntry,
+    annotate_effects,
+    read_effects_manifest,
+)
 from synth_ui.clients.rig import Rig, RigEffect, RigLibrary
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
@@ -22,11 +26,13 @@ from synth_ui.config import (
     SCREEN_W,
     SOUNDFONT_DIR,
     STATE_FILE,
+    TRIMS_FILE,
     VOICES_MANIFEST,
 )
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.audio import AudioScreen
 from synth_ui.ui.screens.base import Screen
+from synth_ui.ui.screens.effect_params import EffectParamsScreen
 from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
 from synth_ui.ui.screens.preset import PresetScreen
 from synth_ui.ui.screens.rigs import RigsScreen
@@ -34,7 +40,7 @@ from synth_ui.ui.screens.splash import SplashScreen
 from synth_ui.ui.screens.text_entry import TextEntryScreen
 from synth_ui.ui.screens.usb import USBScreen
 from synth_ui.ui.screens.voice_picker import VoicePickerScreen
-from synth_ui.ui.utils import load_voices
+from synth_ui.ui.utils import load_voices, lv2_world
 
 SPLASH_DURATION_MS = 5000
 
@@ -88,8 +94,11 @@ class SynthUI:
         self._audio_screen: AudioScreen | None = None
         self._effects_screen: EffectsScreen | None = None
         self._catalog_screen: EffectsCatalogScreen | None = None
-        self._catalog: list[EffectCatalogEntry] = read_effects_manifest(
-            EFFECTS_MANIFEST
+        self._params_screen: EffectParamsScreen | None = None
+        # Annotated so the browser can grey out effects this board can't load,
+        # rather than letting a tap fail silently.
+        self._catalog: list[EffectCatalogEntry] = annotate_effects(
+            read_effects_manifest(EFFECTS_MANIFEST), lv2_world.has
         )
         self._picker: VoicePickerScreen | None = None
 
@@ -140,7 +149,7 @@ class SynthUI:
         changed: opening the voice picker, and after a USB import.
         """
         self._library = {
-            v.name: v for v in load_voices(VOICES_MANIFEST, SOUNDFONT_DIR)
+            v.name: v for v in load_voices(VOICES_MANIFEST, SOUNDFONT_DIR, TRIMS_FILE)
         }
 
     def _voice_for(self, name: str) -> Voice | None:
@@ -213,8 +222,11 @@ class SynthUI:
             return
         if self._effects_screen is not None:
             rig.trim_db = self._effects_screen.trim_slider.value
+        # Carry params and bypass, not just the URI. Saving the chain without
+        # what was dialled into it is the same as not saving it.
         rig.effects = [
-            RigEffect(uri=e.uri) for e in self._engine.effects()
+            RigEffect(uri=e.uri, params=dict(e.params), bypassed=e.bypassed)
+            for e in self._engine.effects()
         ]
         self._rigs.replace(rig)
         self._home.refresh(self._rigs.rigs)
@@ -293,6 +305,8 @@ class SynthUI:
             effects=self._engine.effects(),
             catalog=self._catalog,
             on_remove=self._on_remove_effect,
+            on_bypass=self._on_bypass_effect,
+            on_edit=self._show_effect_params_screen,
             on_add=self._show_effects_catalog_screen,
             on_back=self._leave_effects_screen,
             on_trim_change=self._engine.set_rig_trim,
@@ -311,6 +325,48 @@ class SynthUI:
             on_back=self._show_effects_screen,
         )
         self.screen = self._catalog_screen
+
+    def _on_bypass_effect(self, instance: int, bypassed: bool) -> None:
+        """Toggling is a single mod-host command, so it happens inline rather
+        than on a worker: putting it behind a spinner would make an A/B
+        comparison feel slower than it is."""
+        self._engine.set_effect_bypass(instance, bypassed)
+        if self._effects_screen is not None:
+            self._effects_screen.rack_list.effects = self._engine.effects()
+
+    def _show_effect_params_screen(self, instance: int) -> None:
+        effect = next(
+            (e for e in self._engine.effects() if e.instance == instance), None
+        )
+        if effect is None:
+            return
+        name = next(
+            (c.name for c in self._catalog if c.uri == effect.uri), effect.uri
+        )
+        # lv2info is a subprocess; reading it on the UI thread would stall the
+        # frame loop for the length of a plugin scan.
+        self._params_screen = EffectParamsScreen(
+            name=name,
+            ports=self._engine.effect_controls(effect.uri),
+            values=dict(effect.params),
+            on_change=(
+                lambda symbol, value: self._engine.set_effect_param(
+                    instance, symbol, str(value)
+                )
+            ),
+            on_back=self._show_effects_screen,
+            on_reset=lambda: self._reset_effect_params(instance),
+        )
+        self.screen = self._params_screen
+
+    def _reset_effect_params(self, instance: int) -> None:
+        """Back to the plugin's own defaults — the escape hatch from a chain
+        that has been dialled into uselessness."""
+        for port in self._engine.effect_controls(
+            next(e.uri for e in self._engine.effects() if e.instance == instance)
+        ):
+            self._engine.set_effect_param(instance, port.symbol, str(port.default))
+        self._show_effect_params_screen(instance)
 
     def _on_remove_effect(self, instance: int) -> None:
         if self._effects_screen is None:

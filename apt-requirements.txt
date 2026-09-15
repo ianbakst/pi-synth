@@ -25,7 +25,18 @@ mda-lv2
 # lv2ls / lv2info: the UI greys out voices whose plugin isn't installed, and
 # verify_voices --inspect reads a plugin's control symbols + patch properties.
 lilv-utils
+# --- Instrument plugins ---------------------------------------------------
+# amsynth: a two-oscillator analog model. This is the one for the 80s brass
+# poly (the Van Halen "Jump" sound is an Oberheim OB-Xa: detuned saws, fast
+# filter envelope). mda JX10 can approximate it; amsynth gets much closer and
+# ships presets.
+amsynth
+# zynaddsubfx-lv2: additive/subtractive/pad engine with a large preset bank —
+# breadth for pads, bells and leads that the mda and Calf synths don't cover.
+zynaddsubfx-lv2
 # Level calibration (synth_ui.tools.calibrate_levels).
+# aplaymidi (alsa-utils) plays the passage; jack-smf-player would be the
+# direct route but jack-smf-utils is no longer packaged for Debian.
 jack-capture
-jack-tools
+alsa-utils
 ffmpeg

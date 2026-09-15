@@ -14,7 +14,14 @@ from collections.abc import Callable
 import pygame
 
 from synth_ui.clients.voice import Voice
-from synth_ui.config import HEADER_H, SCREEN_H, SCREEN_W, SOUNDFONT_DIR, VOICES_MANIFEST
+from synth_ui.config import (
+    HEADER_H,
+    SCREEN_H,
+    SCREEN_W,
+    SOUNDFONT_DIR,
+    TRIMS_FILE,
+    VOICES_MANIFEST,
+)
 from synth_ui.ui.components.header import Header
 from synth_ui.ui.components.voice_list import VoiceList
 from synth_ui.ui.screens.base import Screen
@@ -45,7 +52,7 @@ class VoicePickerScreen(Screen):
 
         self.voice_list = VoiceList(
             rect=pygame.Rect(0, HEADER_H, SCREEN_W, SCREEN_H - HEADER_H),
-            voices=load_voices(VOICES_MANIFEST, SOUNDFONT_DIR),
+            voices=load_voices(VOICES_MANIFEST, SOUNDFONT_DIR, TRIMS_FILE),
             font_medium=font_medium,
             font_small=font_small,
             on_select=self._on_voice_select,
@@ -67,4 +74,4 @@ class VoicePickerScreen(Screen):
 
     def refresh(self) -> None:
         """Reload the catalog (e.g. after a USB soundfont copy)."""
-        self.voice_list.voices = load_voices(VOICES_MANIFEST, SOUNDFONT_DIR)
+        self.voice_list.voices = load_voices(VOICES_MANIFEST, SOUNDFONT_DIR, TRIMS_FILE)

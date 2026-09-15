@@ -21,18 +21,6 @@
     "resident": true
   },
   {
-    "name": "LivingRoom Upright",
-    "engine": "sfizz",
-    "path": "/home/synth/instruments/piano/livingroom/livingroom-upright.sfz",
-    "category": "Piano"
-  },
-  {
-    "name": "Piano in 162",
-    "engine": "sfizz",
-    "path": "/home/synth/instruments/piano/piano-in-162/piano-in-162.sfz",
-    "category": "Piano"
-  },
-  {
     "name": "Hammond B3",
     "engine": "modhost",
     "uri": "http://gareus.org/oss/lv2/b_synth",
@@ -75,9 +63,10 @@
     "resident": true
   },
   {
-    "name": "DX7 E.Piano",
-    "engine": "dexed",
-    "path": "/home/synth/instruments/dx7/rom1a.syx",
-    "category": "Electric Piano"
+    "name": "Salamander Grand",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/salamander/SalamanderGrandPiano.sfz",
+    "category": "Piano",
+    "resident": false
   }
 ]

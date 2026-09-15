@@ -16,7 +16,7 @@ def _bare_ui(monkeypatch, voices):
     """A SynthUI with only its library wiring — no display, no audio stack."""
     calls = {"n": 0}
 
-    def counting_load_voices(manifest, soundfont_dir):
+    def counting_load_voices(manifest, soundfont_dir, trims_path=None):
         calls["n"] += 1
         return list(voices)
 

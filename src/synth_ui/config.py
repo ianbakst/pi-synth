@@ -18,6 +18,11 @@ STATE_FILE = os.path.expanduser("~/.synth-state")
 # read-only catalog shipped in the image — this is the user's own work, created
 # on the device, so it lives in $HOME and is written atomically.
 RIGS_FILE = os.path.expanduser("~/.synth-rigs.json")
+# Per-voice level trims measured by tools/calibrate_levels on THIS board. In
+# $HOME for the same reason as the rigs: deploy.sh overwrites the shipped
+# voices.json, and most voices (the split GM set) have no manifest entry to
+# write a number into anyway. See clients/trims.py.
+TRIMS_FILE = os.path.expanduser("~/.synth-trims.json")
 
 # Selected ALSA card id (e.g. "sndrpihifiberry"). The UI writes it; scripts/
 # start-jack.sh reads it to pick JACK's device. Absent = auto-detect (default).

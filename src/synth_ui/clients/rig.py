@@ -40,6 +40,9 @@ class RigEffect:
 
     uri: str
     params: dict[str, float] = field(default_factory=dict)
+    # A bypassed effect is part of the rig: you bypass a chorus for one song and
+    # want it still there, still set up, when you come back.
+    bypassed: bool = False
 
 
 @dataclass
@@ -55,7 +58,10 @@ class Rig:
         return {
             "name": self.name,
             "voice": self.voice,
-            "effects": [{"uri": e.uri, "params": e.params} for e in self.effects],
+            "effects": [
+                {"uri": e.uri, "params": e.params, "bypassed": e.bypassed}
+                for e in self.effects
+            ],
             "trim_db": self.trim_db,
         }
 
@@ -68,6 +74,7 @@ class Rig:
                 RigEffect(
                     uri=e["uri"],
                     params={k: float(v) for k, v in (e.get("params") or {}).items()},
+                    bypassed=bool(e.get("bypassed", False)),
                 )
                 for e in entry.get("effects", [])
             ],

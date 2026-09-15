@@ -39,10 +39,21 @@ lilv-utils
 # Level calibration (python3 -m synth_ui.tools.calibrate_levels): plays a fixed
 # passage into each voice, records the master chain, and measures EBU R128
 # loudness to derive each voice's gain_trim_db.
+# aplaymidi delivers the passage via 'Midi Through' + a2jmidid; it comes from
+# alsa-utils, already declared above. jack-smf-player would be the direct route,
+# but jack-smf-utils is no longer packaged for Debian.
 jack-capture
-jack-tools
 ffmpeg
 libreadline-dev
+# --- Instrument plugins ---------------------------------------------------
+# amsynth: a two-oscillator analog model. This is the one for the 80s brass
+# poly (the Van Halen "Jump" sound is an Oberheim OB-Xa: detuned saws, fast
+# filter envelope). mda JX10 can approximate it; amsynth gets much closer and
+# ships presets.
+amsynth
+# zynaddsubfx-lv2: additive/subtractive/pad engine with a large preset bank —
+# breadth for pads, bells and leads that the mda and Calf synths don't cover.
+zynaddsubfx-lv2
 # LV2 effect plugins hosted by the effects mod-host (reverb/delay/chorus/EQ/comp).
 # Confirm available URIs on the Pi with `lv2ls`. Add/trim to taste.
 calf-plugins

@@ -103,11 +103,29 @@ fi
 # docs/engine-architecture.md.
 ISOL="isolcpus=1,2,3 nohz_full=1,2,3 rcu_nocbs=1,2,3"
 QUIET="quiet loglevel=3 vt.global_cursor_default=0 logo.nologo"
+# Never let a USB device be runtime-suspended. Every USB device on this box is a
+# MIDI controller that must respond the instant it is played; there is no
+# battery to save and nothing here is idle by design. Waking a suspended device
+# costs milliseconds at exactly the wrong moment.
+#
+# Honesty about provenance: this was added while chasing a MIDI latency bug that
+# turned out to be the keyboard (see CLAUDE.md, MIDI). It did NOT fix that, and
+# it has never been shown to fix anything. It is kept because it is the right
+# default for an always-on instrument, not because it is load-bearing.
+USB="usbcore.autosuspend=-1"
 if ! grep -q "isolcpus=1,2,3" "${CMDLINE}"; then
 	sed -i "s|\$| ${ISOL} ${QUIET}|" "${CMDLINE}"
 	echo "cmdline.txt: appended CPU isolation + quiet-boot args"
 else
 	echo "cmdline.txt: CPU isolation already present"
+fi
+# Separate guard: boards imaged before this arg existed have the isolation but
+# not this, and a combined check would skip them.
+if ! grep -q "usbcore.autosuspend" "${CMDLINE}"; then
+	sed -i "s|\$| ${USB}|" "${CMDLINE}"
+	echo "cmdline.txt: appended ${USB}"
+else
+	echo "cmdline.txt: usbcore.autosuspend already present"
 fi
 
 # Move the Linux console off the display (tty1 -> tty3): kernel + systemd boot

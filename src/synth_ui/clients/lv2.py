@@ -21,6 +21,7 @@ the engine rather than the URI.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -142,3 +143,85 @@ class LV2World:
         if not self._readable:
             return True
         return uri in installed
+
+
+@dataclass
+class ControlPort:
+    """One editable knob on a plugin.
+
+    Discovered from `lv2info` rather than declared in our own tables. Guessing
+    port symbols by hand has been a repeated source of silent failures here, and
+    a plugin is the authority on its own controls.
+    """
+
+    symbol: str
+    name: str
+    minimum: float
+    maximum: float
+    default: float
+    toggled: bool = False
+    integer: bool = False
+    # Ports a performer has no use for: mostly Calf's level meters and graph
+    # outputs, which are inputs in name only.
+    hidden: bool = False
+
+    def clamp(self, value: float) -> float:
+        return max(self.minimum, min(self.maximum, value))
+
+
+_PORT_BLOCK_RE = re.compile(r"Symbol:\s*(\S+)")
+_PORT_NAME_RE = re.compile(r"Name:\s*(.+)")
+_PORT_MIN_RE = re.compile(r"Minimum:\s*(-?[\d.eE+]+)")
+_PORT_MAX_RE = re.compile(r"Maximum:\s*(-?[\d.eE+]+)")
+_PORT_DEF_RE = re.compile(r"Default:\s*(-?[\d.eE+]+)")
+
+# Calf exposes per-band analyser and meter ports as control inputs. They are not
+# knobs; showing them buries the three controls that matter under twenty that
+# don't.
+_HIDDEN_SUFFIXES = ("_vu", "meter", "_level_out", "analyzer", "_graph", "bypass")
+
+
+def parse_control_ports(info: str) -> list[ControlPort]:
+    """Input control ports from `lv2info` output, in the plugin's own order."""
+    ports: list[ControlPort] = []
+    for block in info.split("\n\n"):
+        if "ControlPort" not in block or "InputPort" not in block:
+            continue
+        symbol = _PORT_BLOCK_RE.search(block)
+        if not symbol:
+            continue
+        name = _PORT_NAME_RE.search(block)
+        minimum = _PORT_MIN_RE.search(block)
+        maximum = _PORT_MAX_RE.search(block)
+        default = _PORT_DEF_RE.search(block)
+        # A port with no declared range can't drive a slider; skip rather than
+        # invent 0..1, which would send out-of-range values the plugin rejects.
+        if not (minimum and maximum):
+            continue
+        low, high = float(minimum.group(1)), float(maximum.group(1))
+        ports.append(
+            ControlPort(
+                symbol=symbol.group(1),
+                name=name.group(1).strip() if name else symbol.group(1),
+                minimum=low,
+                maximum=high,
+                default=float(default.group(1)) if default else low,
+                # lv2info prints properties as URIs ("...lv2core#toggled"),
+                # lower-case, not as the capitalised words the summary lines use.
+                toggled="#toggled" in block.lower(),
+                integer="#integer" in block.lower(),
+                hidden=any(h in symbol.group(1).lower() for h in _HIDDEN_SUFFIXES),
+            )
+        )
+    return ports
+
+
+def control_ports(uri: str, runner: Runner | None = None) -> list[ControlPort]:
+    """The editable controls of an installed plugin. Empty if lv2info can't be
+    run — the caller shows "no adjustable parameters" rather than failing."""
+    run = runner or _subprocess_runner
+    code, out = run(["lv2info", uri])
+    if code != 0:
+        logger.warning("lv2info failed for %s", uri)
+        return []
+    return [p for p in parse_control_ports(out) if not p.hidden]

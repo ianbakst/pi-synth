@@ -18,20 +18,24 @@ set -u
 
 DEVICE_FILE="${SYNTH_AUDIO_DEVICE_FILE:-${HOME:-/home/synth}/.synth-audio-device}"
 # MIDI bridge. `raw` uses jackd's own alsa_rawmidi driver, which reads the
-# hardware MIDI device directly and publishes physical JACK ports for it.
+# hardware MIDI device directly and publishes physical JACK ports for it,
+# instead of going through a2jmidid and the ALSA sequencer.
 #
-# This replaces a2jmidid, which went through the ALSA *sequencer* and
-# re-timestamped events onto JACK's clock. Measured on hardware: `aseqdump` saw
-# key presses instantly while jack_midi_dump on a2jmidid's port saw them a
-# variable delay later — up to seconds — with no xruns and the sound following
-# the moment the event landed. The delay was entirely in that hand-off. Reading
-# rawmidi skips the sequencer and the re-timestamping altogether.
+# Currently `none`: a2jmidid is in the path, and there is no measured reason to
+# change that.
 #
-# Currently `none`: a2jmidid is back in the path. `raw` was tried against a
-# variable MIDI delay and made no difference — the delay was later measured with
-# `aseqdump` on a fully idle machine, every service stopped, and is upstream of
-# JACK entirely (USB, the MIDI driver, or the keyboard). Left here because one
-# bridge inside jackd is still the tidier end state once that is resolved.
+# History, because the comment here used to claim the opposite. `raw` was tried
+# against a variable seconds-long MIDI delay and made no difference. a2jmidid's
+# sequencer hand-off was blamed on the strength of one reading — `aseqdump`
+# looking instant while jack_midi_dump looked late — and that blame was wrong.
+# The delay was the Roland FP-10 batching its USB MIDI whenever its Bluetooth
+# was enabled, upstream of every piece of software here. Proven with
+# tools/midi_latency.py: a Pico on the same USB controller delivered 1.0 notes
+# per read while the piano delivered ~14 per read in clumps ~2s apart.
+#
+# So a2jmidid was never shown to add delay. `raw` is left available because one
+# bridge inside jackd is still tidier than two processes, but that is a
+# simplification, not a fix — measure before switching.
 #
 # `raw` also takes the MIDI device exclusively, which locks the ALSA sequencer
 # out of it: `aseqdump` and `aconnect` cannot see the keyboard while it is set.

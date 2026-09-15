@@ -4,12 +4,17 @@ import os
 
 from synth_ui.clients.lv2 import LV2World, spec_for
 from synth_ui.clients.soundfont import discover
+from synth_ui.clients.trims import apply_trims, read_trims
 from synth_ui.clients.voice import Voice, annotate
 from synth_ui.clients.voice import read_voices_manifest as _read_manifest
 
 # One LV2 world for the process: it caches `lv2ls` output, so refreshing the
 # voice list (e.g. after a USB copy) doesn't re-scan the plugin world each time.
 _lv2 = LV2World()
+# Public alias: the effects catalogue needs the same cached plugin list the
+# voice library uses, and re-scanning lv2ls per screen is what made the old
+# library reload cost 2s of CPU per second of wall time.
+lv2_world = _lv2
 
 
 def scan_soundfonts(directory: str) -> list[str]:
@@ -32,7 +37,9 @@ def soundfont_engine() -> str:
     return "fluida" if spec and _lv2.has(spec.uri) else "fluidsynth"
 
 
-def load_voices(manifest_path: str, soundfont_dir: str) -> list[Voice]:
+def load_voices(
+    manifest_path: str, soundfont_dir: str, trims_path: str | None = None
+) -> list[Voice]:
     """The instrument library: curated manifest entries plus every SoundFont in
     the soundfont directory.
 
@@ -60,6 +67,9 @@ def load_voices(manifest_path: str, soundfont_dir: str) -> list[Voice]:
         names.add(voice.name)
         voices.append(voice)
 
+    # Measured levels last, so they override whatever the manifest declared.
+    if trims_path:
+        apply_trims(voices, read_trims(trims_path))
     return annotate(voices, has_uri=_lv2.has)
 
 

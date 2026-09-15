@@ -31,7 +31,7 @@ hardware, the same convention already proven for the instrument mod-host
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.mod_host_client import ModHostClient
@@ -48,6 +48,13 @@ _MAX_INSTANCE = 89
 class Effect:
     instance: int
     uri: str
+    # Bypassed effects stay loaded and stay wired. mod-host passes audio through
+    # untouched, so toggling is instant and the A/B is honest: removing and
+    # re-adding would re-instantiate the plugin and lose its settings.
+    bypassed: bool = False
+    # Control symbol -> value, as last set. Held here so the params screen can
+    # show what a knob is really at, and so a rig can save it.
+    params: dict[str, float] = field(default_factory=dict)
 
 
 class EffectsRack:
@@ -91,7 +98,30 @@ class EffectsRack:
         self._rechain()
 
     def set_param(self, instance: int, symbol: str, value: str) -> bool:
-        return self._mh.set_param(instance, symbol, value)
+        ok = self._mh.set_param(instance, symbol, value)
+        if ok:
+            effect = self._find(instance)
+            if effect is not None:
+                effect.params[symbol] = float(value)
+        return ok
+
+    def set_bypass(self, instance: int, bypassed: bool) -> bool:
+        """Toggle an effect in or out of the chain without unloading it.
+
+        Deliberately not implemented as remove-and-re-add: that would
+        re-instantiate the plugin and throw away every parameter set on it, so
+        an A/B comparison would not be comparing the same thing.
+        """
+        effect = self._find(instance)
+        if effect is None:
+            return False
+        if not self._mh.bypass(instance, bypassed):
+            return False
+        effect.bypassed = bypassed
+        return True
+
+    def _find(self, instance: int) -> Effect | None:
+        return next((e for e in self._effects if e.instance == instance), None)
 
     def effects(self) -> list[Effect]:
         return list(self._effects)
@@ -128,7 +158,19 @@ class EffectsRack:
                 used.add(instance)
             for symbol, value in wanted.params.items():
                 self._mh.set_param(instance, symbol, str(value))
-            effects.append(Effect(instance, wanted.uri))
+            # Bypass is restored explicitly, and on every effect rather than
+            # only the bypassed ones: an instance reused from the outgoing rig
+            # carries that rig's bypass state, so leaving it alone would silence
+            # an effect the new rig wants on (or vice versa).
+            self._mh.bypass(instance, wanted.bypassed)
+            effects.append(
+                Effect(
+                    instance,
+                    wanted.uri,
+                    bypassed=wanted.bypassed,
+                    params=dict(wanted.params),
+                )
+            )
 
         self._effects = effects
         self._rechain()

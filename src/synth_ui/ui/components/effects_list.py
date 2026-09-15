@@ -6,6 +6,7 @@ from synth_ui.clients.effects_catalog import EffectCatalogEntry
 from synth_ui.clients.effects_rack import Effect
 from synth_ui.config import (
     BG,
+    BTN_ACTIVE,
     BTN_H,
     BTN_MARGIN,
     BTN_NORMAL,
@@ -15,6 +16,7 @@ from synth_ui.config import (
     SLIDER_FILL,
     STATUS_ERR,
     TEXT_ACTIVE,
+    TEXT_DISABLED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
@@ -22,6 +24,10 @@ from synth_ui.ui.components.base import Component
 from synth_ui.ui.event import UIEvent
 
 _REMOVE_W = 48
+# Three zones per row, right to left: remove, bypass, then the name — which is
+# the rest of the row and opens the effect's parameters. Bypass gets its own
+# wide target because it's the one you reach for while playing.
+_BYPASS_W = 72
 
 
 class RackEffectsList(Component):
@@ -35,6 +41,8 @@ class RackEffectsList(Component):
         font_medium: pygame.font.Font,
         font_small: pygame.font.Font,
         on_remove: Callable[[int], None],
+        on_bypass: Callable[[int, bool], None] | None = None,
+        on_edit: Callable[[int], None] | None = None,
     ):
         super().__init__(rect)
         self.effects = effects
@@ -42,6 +50,8 @@ class RackEffectsList(Component):
         self.font_medium = font_medium
         self.font_small = font_small
         self.on_remove = on_remove
+        self.on_bypass = on_bypass
+        self.on_edit = on_edit
 
         self.scroll_offset: int = 0
         self._finger_moved: bool = False
@@ -78,14 +88,37 @@ class RackEffectsList(Component):
             pygame.draw.rect(clip, BTN_NORMAL, btn_rect, border_radius=6)
 
             name = self._name_for(effect)
-            text = self.font_medium.render(name, True, TEXT_PRIMARY)
-            max_text_w = btn_rect.width - _REMOVE_W - 24
+            # A bypassed effect is still in the chain and still costs its slot,
+            # so it stays on the list — dimmed, not hidden.
+            name_color = TEXT_DISABLED if effect.bypassed else TEXT_PRIMARY
+            text = self.font_medium.render(name, True, name_color)
+            max_text_w = btn_rect.width - _REMOVE_W - _BYPASS_W - 24
             if text.get_width() > max_text_w:
                 while text.get_width() > max_text_w and len(name) > 3:
                     name = name[:-4] + "..."
-                    text = self.font_medium.render(name, True, TEXT_PRIMARY)
+                    text = self.font_medium.render(name, True, name_color)
             text_y = btn_rect.y + (btn_rect.height - text.get_height()) // 2
             clip.blit(text, (btn_rect.x + 12, text_y))
+
+            bypass_rect = self._bypass_rect(btn_rect)
+            pygame.draw.rect(
+                clip,
+                BTN_NORMAL if effect.bypassed else BTN_ACTIVE,
+                bypass_rect,
+                border_radius=6,
+            )
+            label = self.font_small.render(
+                "OFF" if effect.bypassed else "ON",
+                True,
+                TEXT_SECONDARY if effect.bypassed else TEXT_ACTIVE,
+            )
+            clip.blit(
+                label,
+                (
+                    bypass_rect.x + (bypass_rect.width - label.get_width()) // 2,
+                    bypass_rect.y + (bypass_rect.height - label.get_height()) // 2,
+                ),
+            )
 
             remove_rect = self._remove_rect(btn_rect)
             pygame.draw.rect(clip, STATUS_ERR, remove_rect, border_radius=6)
@@ -119,6 +152,14 @@ class RackEffectsList(Component):
             btn_rect.right - _REMOVE_W, btn_rect.y, _REMOVE_W, btn_rect.height
         )
 
+    def _bypass_rect(self, btn_rect: pygame.Rect) -> pygame.Rect:
+        return pygame.Rect(
+            btn_rect.right - _REMOVE_W - _BYPASS_W - 4,
+            btn_rect.y + 8,
+            _BYPASS_W,
+            btn_rect.height - 16,
+        )
+
     def _tap(self, x: int, y: int) -> None:
         if self.loading or not self.effects:
             return
@@ -129,10 +170,17 @@ class RackEffectsList(Component):
         btn_y = index * (BTN_H + BTN_MARGIN) - self.scroll_offset
         btn_w = self.rect.width - SCROLL_BAR_W - BTN_PAD_X * 2
         btn_rect = pygame.Rect(BTN_PAD_X, btn_y, btn_w, BTN_H)
-        remove_rect = self._remove_rect(btn_rect)
         relative_x = x - self.rect.x
-        if remove_rect.collidepoint(relative_x, y - self.rect.y):
-            self.on_remove(self.effects[index].instance)
+        relative_y_in_row = y - self.rect.y
+        effect = self.effects[index]
+        if self._remove_rect(btn_rect).collidepoint(relative_x, relative_y_in_row):
+            self.on_remove(effect.instance)
+        elif self._bypass_rect(btn_rect).collidepoint(relative_x, relative_y_in_row):
+            if self.on_bypass:
+                self.on_bypass(effect.instance, not effect.bypassed)
+        elif self.on_edit:
+            # Anywhere else on the row: open this effect's parameters.
+            self.on_edit(effect.instance)
 
     def handle_event(self, event: UIEvent) -> bool:
         if event.type == pygame.FINGERDOWN:

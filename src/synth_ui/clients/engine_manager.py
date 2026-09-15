@@ -31,6 +31,7 @@ from synth_ui.clients.constants import (
 from synth_ui.clients.effects_rack import Effect, EffectsRack
 from synth_ui.clients.engine import ENGINE_REGISTRY, Engine, EngineContext
 from synth_ui.clients.jack_graph import JackGraph
+from synth_ui.clients.lv2 import ControlPort, control_ports
 from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import Rig, plan
@@ -277,6 +278,30 @@ class EngineManager:
     def is_connected(self) -> bool:
         return self._active is not None and self._active.is_ready()
 
+    @property
+    def jack(self) -> JackGraph:
+        """The JACK graph, for tools that need to patch connections of their
+        own (calibrate_levels wires its passage player in by hand)."""
+        return self._jack
+
+    def active_midi_port(self) -> str | None:
+        """The JACK MIDI input of the instrument currently loaded.
+
+        _wire() only ever connects *physical* MIDI sources, which is right for
+        keyboards but means a software sender (the calibration passage player)
+        is never wired up automatically. Tools that need to play into the
+        instrument ask for the port and connect it themselves.
+        """
+        return self._active.midi_port if self._active is not None else None
+
+    def master_output_ports(self) -> list[str]:
+        """Where to record the finished signal: the tail of the master chain,
+        falling back to the active instrument if no master chain is up."""
+        ports = self._master.output_ports()
+        if ports:
+            return ports
+        return self._active.audio_out_ports if self._active is not None else []
+
     # ------------------------------------------------------------------
     # Audio device (which ALSA card JACK opens)
     # ------------------------------------------------------------------
@@ -471,6 +496,13 @@ class EngineManager:
         self._effects.clear()
         if self._active is not None:
             self._wire(self._active)
+
+    def set_effect_bypass(self, instance: int, bypassed: bool) -> bool:
+        return self._effects.set_bypass(instance, bypassed)
+
+    def effect_controls(self, uri: str) -> list[ControlPort]:
+        """The knobs this effect exposes, read from the plugin itself."""
+        return control_ports(uri)
 
     def set_effect_param(self, instance: int, symbol: str, value: str) -> bool:
         return self._effects.set_param(instance, symbol, value)
