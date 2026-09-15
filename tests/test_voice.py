@@ -91,7 +91,9 @@ def test_unknown_engine_is_reported():
 
 
 def test_process_engine_voice_only_needs_its_file():
-    voice = Voice("GM", "fluidsynth", "/sf/default.sf2", "GM")
+    """A ProcessEngine voice is validated on its file alone — it names no LV2
+    plugin, because the engine is a separate process, not a plugin."""
+    voice = Voice("Grand", "pianoteq", "/inst/grand.fxp", "Piano")
     assert validate(voice, has_uri=lambda uri: False, path_exists=lambda p: True) == ""
 
 

@@ -5,7 +5,7 @@ Requires=jack.service
 # Always-on again, and PartOf=jack.service so it cycles with the server.
 #
 # mod-host was on-demand for a while: hardware validation on the *pi4* found it
-# sitting idle on core 2 alongside another core-2 engine (e.g. fluidsynth) caused
+# sitting idle on core 2 alongside another core-2 process engine caused
 # continuous JACK XRuns — two RT clients contending for one isolated core. That
 # lifecycle is no longer possible: mod-host hosts the master chain (trim +
 # limiter, clients/master_chain.py), which every voice and every effect feeds
@@ -13,7 +13,7 @@ Requires=jack.service
 # instrument.
 #
 # The xrun finding still stands as a *load* question — re-measure on the CM5
-# with fluidsynth or setBfree active alongside mod-host. It stops mattering
+# with a process engine active alongside mod-host. It stops mattering
 # entirely once those two move into mod-host as LV2 plugins (see
 # docs/voice-library.md), which is the direction of travel.
 PartOf=jack.service

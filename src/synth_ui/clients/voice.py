@@ -30,7 +30,7 @@ from synth_ui.clients.lv2 import MODHOST_ENGINES, spec_for
 
 # Engines backed by a systemd unit rather than an LV2 plugin. Kept here (rather
 # than imported from engine.py) so validation stays free of JACK/subprocess deps.
-PROCESS_ENGINES = frozenset({"fluidsynth", "pianoteq"})
+PROCESS_ENGINES = frozenset({"pianoteq"})
 KNOWN_ENGINES = PROCESS_ENGINES | MODHOST_ENGINES
 
 

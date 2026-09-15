@@ -5,15 +5,15 @@
 #
 # Always-on at boot:  cpu-performance, jack, a2jmidid, ttymidi, mod-host, synth-ui
 # On-demand (started by the UI / EngineManager via systemctl, NOT enabled):
-#                     fluidsynth-engine
+#                     none at present. ProcessEngine remains for a future
+#                     Pianoteq; soundfonts are played by Fluida inside mod-host.
 #   mod-host is always-on again: it hosts the master chain (trim + limiter) that
 #   every voice and every effect feeds through, so it can't be tied to whether a
 #   mod-host *instrument* happens to be active. See systemd/mod-host.service for
 #   the pi4 xrun history this reverses, and docs/voice-library.md.
 #   ttymidi is the DIN-MIDI counterpart to a2jmidid (USB): always-on, but its
 #   ConditionPathExists=/dev/ttyAMA0 makes it inert on a board with no UART MIDI.
-for unit in cpu-performance jack a2jmidid ttymidi mod-host \
-            fluidsynth-engine synth-ui; do
+for unit in cpu-performance jack a2jmidid ttymidi mod-host synth-ui; do
 	install -m 644 "${PI_SYNTH_SRC}/systemd/${unit}.service" \
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"
 done
@@ -38,8 +38,10 @@ fi
 
 on_chroot << 'EOF'
 set -e
-# Stock fluidsynth.service (Debian's packaged service) grabs port 9800 and the
-# audio device, which blocks our fluidsynth-engine from binding its shell server
+# Stock fluidsynth.service (Debian's packaged service) grabs the audio device.
+# We no longer run fluidsynth ourselves — Fluida plays soundfonts inside
+# mod-host — but the package is still installed for libfluidsynth, so Debian's
+# unit can still appear and take the DAC out from under JACK
 # (EADDRINUSE) and starves the DAC. Pi OS ships it as BOTH a system unit and a
 # per-user unit, so mask both — masking only the system one lets the user unit
 # respawn and squat 9800.

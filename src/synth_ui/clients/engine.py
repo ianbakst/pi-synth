@@ -2,7 +2,7 @@
 Engine layer: one uniform interface over every audio engine.
 
 Each engine is either:
-  - a ProcessEngine  — backed by a systemd unit (fluidsynth, pianoteq).
+  - a ProcessEngine  — backed by a systemd unit (Pianoteq, if installed).
     start()/stop() are `systemctl start/stop`; RT priority + core pinning come
     from the unit file, never from Python.
   - a ModHostEngine  — an LV2 plugin in mod-host (sfizz, dexed). mod-host is
@@ -14,7 +14,7 @@ Reality-driven divergence from the design doc: sfizz and dexed are NOT separate
 engines. They share mod-host's single plugin slot and its stable JACK ports, so
 one ModHostEngine handles both — switching between them is an in-place plugin
 swap (`load`), not a JACK re-patch. The manager decides in-place-reload vs. full
-switch by comparing `Engine.key` (fluidsynth|pianoteq|modhost).
+switch by comparing `Engine.key` (pianoteq|modhost).
 
 A live engine's JACK ports are *discovered* through JackGraph (by client + type +
 direction) rather than hardcoded, so this adapts to the names engines actually
@@ -26,7 +26,6 @@ change ModHostEngine.jack_client — discovery does the rest.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -37,9 +36,7 @@ from synth_ui.clients.jack_graph import JackGraph
 from synth_ui.clients.lv2 import MODHOST_ENGINES
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.slots import InstrumentSlots
-from synth_ui.clients.synth_client import FluidSynthController
 from synth_ui.clients.voice import Voice
-from synth_ui.config import SOUNDFONT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +67,6 @@ class EngineContext:
 
     jack: JackGraph
     mod_host: ModHostClient
-    fluidsynth: FluidSynthController
     # Which mod-host instance holds which instrument. Shared across engines and
     # across switches, which is what lets plugins stay loaded (see slots.py).
     slots: InstrumentSlots
@@ -147,55 +143,6 @@ class ProcessEngine(Engine):
 
     def load(self, voice: Voice) -> bool:
         return True  # single-voice engines have nothing to reload
-
-
-# fluidsynth-engine.service launches fluidsynth with this soundfont already on
-# its command line, so it's resident as sfont 1 for the whole process lifetime.
-_DEFAULT_SOUNDFONT = os.path.join(SOUNDFONT_DIR, "default.sf2")
-
-
-def _same_file(a: str, b: str) -> bool:
-    """True if a and b are the same file (following symlinks, e.g. default.sf2)."""
-    try:
-        return os.path.samefile(a, b)
-    except OSError:
-        return os.path.realpath(a) == os.path.realpath(b)
-
-
-class FluidSynthEngine(ProcessEngine):
-    key = "fluidsynth"
-    jack_client = "fluidsynth"
-    unit = "fluidsynth-engine.service"
-
-    def load(self, voice: Voice) -> bool:
-        if not voice.path:
-            return True
-        # The startup soundfont is already resident as sfont 1 for the life of
-        # the process, so switching to a voice from it is just a preset select,
-        # NOT a second (multi-hundred-MB) reload off the SD card. This is what
-        # makes these voices switch quickly instead of re-reading a font that
-        # fluidsynth already has loaded.
-        if _same_file(voice.path, _DEFAULT_SOUNDFONT):
-            self._select(voice, sfont_id=1)
-            return True
-        if not self.ctx.fluidsynth.load_soundfont(voice.path):
-            return False
-        # A freshly loaded font becomes the highest-numbered sfont; the client
-        # reports it, and load_soundfont already selects program 0 of it. Only
-        # re-select when this voice wants a specific instrument.
-        if voice.program >= 0:
-            self._select(voice, sfont_id=self.ctx.fluidsynth.current_sfont_id())
-        return True
-
-    def _select(self, voice: Voice, sfont_id: int) -> None:
-        """Pick the instrument inside the soundfont. One .sf2 holds up to 128
-        programs per bank, so this is what makes a GM font a *library* of voices
-        (Rhodes, Wurlitzer, drawbar organ, synth brass) rather than one entry."""
-        bank, program = voice.bank, max(0, voice.program)
-        self.ctx.fluidsynth.select_preset(0, sfont_id, bank, program)
-
-    def panic(self) -> None:
-        self.ctx.fluidsynth.reset()
 
 
 class PianoteqEngine(ProcessEngine):
@@ -301,7 +248,6 @@ class ModHostEngine(Engine):
 # engine string (from voices.json) -> Engine class. A new engine is one class +
 # one entry; the manager and UI never change.
 ENGINE_REGISTRY: dict[str, type[Engine]] = {
-    "fluidsynth": FluidSynthEngine,
     "pianoteq": PianoteqEngine,
     # Every name that resolves to an LV2 plugin — `modhost` plus each alias in
     # lv2.PLUGIN_SPECS (sfizz, dexed, fluida) — is played by mod-host. Derived

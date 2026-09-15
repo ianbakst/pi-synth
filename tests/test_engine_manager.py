@@ -246,23 +246,6 @@ def test_unknown_engine_returns_false():
     assert m._active is None
 
 
-# --- fluidsynth-only delegation ---------------------------------------------
-
-def test_presets_and_gain_only_apply_to_fluidsynth():
-    m = make_mgr()
-    m._fluidsynth = MagicMock()
-    m._fluidsynth.list_presets.return_value = ["p1", "p2"]
-
-    m.load_voice(GM)
-    assert m.list_presets() == ["p1", "p2"]
-    m.set_gain(2.5)
-    m._fluidsynth.set_gain.assert_called_once_with(2.5)
-
-    m.load_voice(SFIZZ)                         # switch away from fluidsynth
-    m._fluidsynth.reset_mock()
-    assert m.list_presets() == []
-    m.set_gain(1.0)
-    m._fluidsynth.set_gain.assert_not_called()
 
 
 def test_is_connected_reflects_active_readiness():
@@ -429,12 +412,6 @@ def test_volume_reaches_every_voice_not_just_fluidsynth():
     assert master.volume_db == -60.0   # silence floor, not a tiny gain
 
 
-def test_volume_falls_back_to_fluidsynth_without_a_master_chain():
-    m = make_mgr(master=FakeMaster(ready=False))
-    m._fluidsynth = MagicMock()
-    m.load_voice(GM)
-    m.set_gain(2.0)
-    m._fluidsynth.set_gain.assert_called_once_with(2.0)
 
 
 def test_changing_audio_card_rebuilds_the_master_chain(tmp_path):

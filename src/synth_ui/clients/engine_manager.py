@@ -5,14 +5,14 @@ Owns exactly one active Engine (see engine.py) and composes JackGraph + the
 engine registry to switch instruments with:
   - connect-before-disconnect (MIDI *and* audio) — no silent gap on a switch,
   - panic-before-teardown — no stuck notes,
-  - same-source in-place reload (fluidsynth SF2 -> SF2, or sfizz <-> dexed inside
+  - same-source in-place reload (sfizz <-> dexed inside
     mod-host) with no process restart.
 
 Crucially, the audio wiring (engine outputs -> system:playback) happens here —
 that is what makes mod-host-hosted instruments (sfizz/dexed) audible, which the
 old shell-script path never did. This replaces engine-manager.sh / midi-connect.sh
-entirely; the UI's public API is unchanged (load_voice / list_presets /
-select_preset / set_gain / is_connected).
+entirely; the UI's public API is unchanged (load_voice / set_gain /
+is_connected).
 """
 
 import logging
@@ -22,11 +22,7 @@ import time
 
 from synth_ui.clients.audio_devices import AudioDevices, Card
 from synth_ui.clients.constants import (
-    DEFAULT_PORT,
-    FIRST_TIMEOUT,
-    LOAD_TIMEOUT,
     LOCALHOST,
-    SILENCE_TIMEOUT,
 )
 from synth_ui.clients.effects_rack import Effect, EffectsRack
 from synth_ui.clients.engine import ENGINE_REGISTRY, Engine, EngineContext
@@ -36,7 +32,6 @@ from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import Rig, plan
 from synth_ui.clients.slots import InstrumentSlots
-from synth_ui.clients.synth_client import FluidSynthController, Preset
 from synth_ui.clients.voice import Voice
 from synth_ui.config import AUDIO_DEVICE_FILE, MASTER_CHAIN, MAX_GAIN
 
@@ -80,20 +75,11 @@ class EngineManager:
 
     def __init__(
         self,
-        fluidsynth_host: str = LOCALHOST,
-        fluidsynth_port: int = DEFAULT_PORT,
         mod_host_host: str = LOCALHOST,
         mod_host_port: int = _MOD_HOST_PORT,
         audio_device_file: str = AUDIO_DEVICE_FILE,
         start_timeout: float = _MOD_HOST_START_TIMEOUT,
     ):
-        self._fluidsynth = FluidSynthController(
-            host=fluidsynth_host,
-            port=fluidsynth_port,
-            timeout=FIRST_TIMEOUT,
-            silence_timeout=SILENCE_TIMEOUT,
-            load_timeout=LOAD_TIMEOUT,
-        )
         self._mod_host = ModHostClient(host=mod_host_host, port=mod_host_port)
         self._jack = JackGraph()
         # Instrument plugins stay loaded across switches; this owns which
@@ -103,7 +89,6 @@ class EngineManager:
         self._ctx = EngineContext(
             jack=self._jack,
             mod_host=self._mod_host,
-            fluidsynth=self._fluidsynth,
             slots=self._slots,
         )
         # The master chain is the permanent tail: everything — every instrument
@@ -216,7 +201,7 @@ class EngineManager:
             # mod-host voice change moves to a different instance whose ports
             # are different, and the old instance's ports don't disappear —
             # they'd keep taking MIDI and feeding the sink alongside the new
-            # one. (For fluidsynth the ports are stable and this is a no-op.)
+            # one. (For a process engine the ports are stable: a no-op.)
             prev_midi, prev_outs = self._active.midi_port, self._active.audio_out_ports
             ok = self._active.load(voice)
             self._active.voice = voice
@@ -255,25 +240,12 @@ class EngineManager:
         voice_trim = self._active.voice.gain_trim_db if self._active else 0.0
         self._master.set_trim_db(voice_trim + db)
 
-    def list_presets(self) -> list[Preset]:
-        if self._is_active("fluidsynth"):
-            return self._fluidsynth.list_presets()
-        return []
-
-    def select_preset(self, channel: int, sfont_id: int, bank: int, prog: int) -> None:
-        if self._is_active("fluidsynth"):
-            self._fluidsynth.select_preset(channel, sfont_id, bank, prog)
-
     def set_gain(self, gain: float) -> None:
         """Master volume, in slider units. Applies to every voice — previously
         this only reached fluidsynth, so most voices had no volume control at
         all. Summed with the active voice's trim inside the master chain."""
         self._volume_db = _gain_to_db(gain)
         self._master.set_volume_db(self._volume_db)
-        if not self._master.is_ready() and self._is_active("fluidsynth"):
-            # No master chain loaded (plugin missing): fall back to the one
-            # engine that has its own gain, so the slider still does something.
-            self._fluidsynth.set_gain(gain)
 
     def is_connected(self) -> bool:
         return self._active is not None and self._active.is_ready()
@@ -474,7 +446,7 @@ class EngineManager:
         The reason mod-host was on-demand still stands as a *load* question, not
         a routing one: two RT clients on core 2 caused continuous xruns on the
         pi4. That measurement predates the CM5 and is the thing to re-check when
-        a process engine (fluidsynth/setBfree) is active alongside mod-host —
+        a process engine (Pianoteq) is ever active alongside mod-host —
         see docs/voice-library.md."""
         return True
 

@@ -3,7 +3,7 @@ import threading
 
 import pygame
 
-from synth_ui.clients import EngineManager, Preset
+from synth_ui.clients import EngineManager
 from synth_ui.clients.effects_catalog import (
     EffectCatalogEntry,
     annotate_effects,
@@ -17,10 +17,7 @@ from synth_ui.config import (
     DEFAULT_GAIN,
     DEFAULT_VOICE,
     EFFECTS_MANIFEST,
-    FLUIDSYNTH_HOST,
-    FLUIDSYNTH_PORT,
     IS_PI,
-    MAX_GAIN,
     MIDI_NEXT_RIG_CC,
     MIDI_PREV_RIG_CC,
     MIDI_PROGRAM_SELECTS_RIG,
@@ -38,7 +35,6 @@ from synth_ui.ui.screens.audio import AudioScreen
 from synth_ui.ui.screens.base import Screen
 from synth_ui.ui.screens.effect_params import EffectParamsScreen
 from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
-from synth_ui.ui.screens.preset import PresetScreen
 from synth_ui.ui.screens.rigs import RigsScreen
 from synth_ui.ui.screens.splash import SplashScreen
 from synth_ui.ui.screens.text_entry import TextEntryScreen
@@ -81,7 +77,9 @@ class SynthUI:
         pygame.init()
 
         if IS_PI:
-            self.display = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.FULLSCREEN)
+            self.display = pygame.display.set_mode(
+                (SCREEN_W, SCREEN_H), pygame.FULLSCREEN
+            )
             pygame.mouse.set_visible(False)
         else:
             self.display = pygame.display.set_mode((SCREEN_W, SCREEN_H))
@@ -89,12 +87,9 @@ class SynthUI:
         pygame.display.set_caption("MIDI Instrument")
 
         self._engine = EngineManager(
-            fluidsynth_host=FLUIDSYNTH_HOST,
-            fluidsynth_port=FLUIDSYNTH_PORT,
             mod_host_port=MOD_HOST_PORT,
         )
         self._gain: float = DEFAULT_GAIN
-        self._preset_screen: PresetScreen | None = None
         self._audio_screen: AudioScreen | None = None
         self._effects_screen: EffectsScreen | None = None
         self._catalog_screen: EffectsCatalogScreen | None = None
@@ -286,26 +281,6 @@ class SynthUI:
     def _on_gain_change(self, gain: float) -> None:
         self._gain = gain
         self._engine.set_gain(gain)
-        if self._preset_screen is not None:
-            self._preset_screen.volume_slider.value = gain
-
-    def _show_preset_screen(self, voice: Voice, presets: list[Preset]) -> None:
-        self._preset_screen = PresetScreen(
-            font_name=voice.name,
-            presets=presets,
-            on_select=self._on_preset_selected,
-            on_back=self._show_home,
-            on_gain_change=self._on_gain_change,
-            initial_gain=self._gain,
-            max_gain=MAX_GAIN,
-        )
-        self.screen = self._preset_screen
-
-    def _on_preset_selected(self, preset: Preset) -> None:
-        self._engine.select_preset(0, 1, preset.bank, preset.prog)
-        self._home.header.name = preset.name
-        if self._preset_screen is not None:
-            self._preset_screen.set_selected(preset)
 
     def _show_home(self) -> None:
         self.screen = self._home
@@ -486,9 +461,16 @@ class SynthUI:
     def _to_ui_event(self, event: pygame.event.Event) -> UIEvent | None:
         match event.type:
             case pygame.FINGERDOWN | pygame.FINGERUP:
-                return UIEvent(event.type, pos=(int(event.x * SCREEN_W), int(event.y * SCREEN_H)))
+                return UIEvent(
+                    event.type,
+                    pos=(int(event.x * SCREEN_W), int(event.y * SCREEN_H)),
+                )
             case pygame.FINGERMOTION:
-                return UIEvent(event.type, pos=(int(event.x * SCREEN_W), int(event.y * SCREEN_H)), dy=int(event.dy * SCREEN_H))
+                return UIEvent(
+                    event.type,
+                    pos=(int(event.x * SCREEN_W), int(event.y * SCREEN_H)),
+                    dy=int(event.dy * SCREEN_H),
+                )
             case pygame.MOUSEBUTTONDOWN | pygame.MOUSEBUTTONUP | pygame.MOUSEMOTION:
                 return UIEvent(event.type, pos=event.pos)
             case pygame.MOUSEWHEEL:
@@ -509,7 +491,8 @@ class SynthUI:
                         self.screen.handle_event(event)
 
                 if not self._splash_done:
-                    if pygame.time.get_ticks() - self._splash_start >= SPLASH_DURATION_MS:
+                    elapsed = pygame.time.get_ticks() - self._splash_start
+                    if elapsed >= SPLASH_DURATION_MS:
                         self.screen = self._home
                         self._splash_done = True
 

@@ -55,10 +55,6 @@ DEFAULT_VOICE = "Rhodes EP"
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 IMAGES_DIR = os.path.join(ASSETS_DIR, "images")
 
-# --- FluidSynth TCP connection ---
-FLUIDSYNTH_HOST = "127.0.0.1"
-FLUIDSYNTH_PORT = 9800
-
 # --- mod-host TCP connection ---
 MOD_HOST_PORT = 5555
 

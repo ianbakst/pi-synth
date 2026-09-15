@@ -65,7 +65,7 @@
   {
     "name": "Salamander Grand",
     "engine": "sfizz",
-    "path": "/home/synth/instruments/salamander/SalamanderGrandPiano.sfz",
+    "path": "/home/synth/instruments/salamander/SalamanderGrandPianoV3_48khz24bit/SalamanderGrandPianoV3.sfz",
     "category": "Piano",
     "resident": false
   }

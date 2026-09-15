@@ -122,7 +122,7 @@ fi
 
 # --- Fluida LV2 (SoundFont player) -> /usr/local/lib/lv2/Fluida.lv2 ---
 # Puts .sf2 playback inside mod-host so the soundfont voices stop needing a
-# separate fluidsynth process on the TCP shell.
+# separate fluidsynth process. That process engine is now gone entirely.
 #
 # Chosen over Calf Fluidsynth (already installed) because Fluida is built as a
 # headless-first LV2: the soundfont path and the instrument selection are

@@ -19,7 +19,6 @@ from synth_ui.config import (
     SLIDER_BG,
     SLIDER_FILL,
     SOUNDFONT_DIR,
-    STATUS_ERR,
     STATUS_OK,
     TEXT_ACTIVE,
     TEXT_PRIMARY,
@@ -47,7 +46,7 @@ class _USBList(Component):
         self.font_small = font_small
         self.on_copy = on_copy
 
-        # Track which basenames are installed (already in library or copied this session)
+        # Basenames already installed: in the library, or copied this session.
         lib = os.path.realpath(SOUNDFONT_DIR)
         self._installed: set[str] = {
             p for p in paths
@@ -98,16 +97,19 @@ class _USBList(Component):
             installed = path in self._installed
             copying = path == self._copying
             btn_color = BTN_ACTIVE if copying else BTN_NORMAL
-            btn_rect = pygame.Rect(BTN_PAD_X, btn_y, list_rect.width - BTN_PAD_X * 2, BTN_H)
+            btn_rect = pygame.Rect(
+                BTN_PAD_X, btn_y, list_rect.width - BTN_PAD_X * 2, BTN_H
+            )
             pygame.draw.rect(clip, btn_color, btn_rect, border_radius=6)
 
             name = display_name(path)
-            text = self.font_medium.render(name, True, TEXT_ACTIVE if copying else TEXT_PRIMARY)
+            name_color = TEXT_ACTIVE if copying else TEXT_PRIMARY
+            text = self.font_medium.render(name, True, name_color)
             max_text_w = btn_rect.width - 150
             if text.get_width() > max_text_w:
                 while text.get_width() > max_text_w and len(name) > 3:
                     name = name[:-4] + "..."
-                    text = self.font_medium.render(name, True, TEXT_ACTIVE if copying else TEXT_PRIMARY)
+                    text = self.font_medium.render(name, True, name_color)
             clip.blit(text, (btn_rect.x + 12, btn_rect.y + 10))
 
             if copying:
@@ -119,14 +121,25 @@ class _USBList(Component):
             else:
                 sub = file_size_str(path)
                 sub_color = TEXT_SECONDARY
-            clip.blit(self.font_small.render(sub, True, sub_color), (btn_rect.x + 12, btn_rect.y + 36))
+            clip.blit(
+                self.font_small.render(sub, True, sub_color),
+                (btn_rect.x + 12, btn_rect.y + 36),
+            )
 
         if total_h > self.rect.height and max_scroll > 0:
             bar_x = self.rect.right - SCROLL_BAR_W
             bar_h = max(30, int(self.rect.height * self.rect.height / total_h))
-            bar_y = self.rect.y + int(self.scroll_offset / max_scroll * (self.rect.height - bar_h))
-            pygame.draw.rect(surface, SLIDER_BG, (bar_x, self.rect.y, SCROLL_BAR_W, self.rect.height))
-            pygame.draw.rect(surface, SLIDER_FILL, (bar_x, bar_y, SCROLL_BAR_W, bar_h), border_radius=4)
+            bar_y = self.rect.y + int(
+                self.scroll_offset / max_scroll * (self.rect.height - bar_h)
+            )
+            pygame.draw.rect(
+                surface, SLIDER_BG,
+                (bar_x, self.rect.y, SCROLL_BAR_W, self.rect.height),
+            )
+            pygame.draw.rect(
+                surface, SLIDER_FILL, (bar_x, bar_y, SCROLL_BAR_W, bar_h),
+                border_radius=4,
+            )
 
     def _tap(self, x: int, y: int) -> None:
         if self.loading or not self.paths or self._copying is not None:

@@ -72,7 +72,7 @@ def spec_for(
 ) -> PluginSpec | None:
     """Resolve an engine name (+ optional manifest overrides) to a PluginSpec.
 
-    Returns None for engines that aren't mod-host-hosted (fluidsynth,
+    Returns None for engines that aren't mod-host-hosted (pianoteq,
     pianoteq) and for a generic voice that forgot its `uri`. Manifest values win
     over the built-in spec, so a voice can pin a URI or supply a file property
     that isn't codified here yet.

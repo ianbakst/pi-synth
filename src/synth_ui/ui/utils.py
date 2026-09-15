@@ -2,7 +2,7 @@ import getpass
 import glob
 import os
 
-from synth_ui.clients.lv2 import LV2World, spec_for
+from synth_ui.clients.lv2 import LV2World
 from synth_ui.clients.soundfont import discover
 from synth_ui.clients.trims import apply_trims, read_trims
 from synth_ui.clients.voice import Voice, annotate
@@ -26,15 +26,15 @@ def scan_soundfonts(directory: str) -> list[str]:
 
 
 def soundfont_engine() -> str:
-    """What plays a .sf2 here: the mod-host plugin if it's installed, otherwise
-    the fluidsynth process engine.
+    """What plays a .sf2 here: the Fluida LV2 plugin, in mod-host.
 
-    Decided at runtime rather than baked into the manifest so one library works
-    on a board with the plugin and a board without — the difference is which
-    engine, never which voices exist.
+    Was a runtime choice between Fluida and a fluidsynth process, so one library
+    worked on a board built either way. That fallback is gone: every image
+    builds Fluida (os-image 02-audio-stack), and carrying a second soundfont
+    engine meant a second audio process, a second RT client, and a TCP control
+    path that nothing else used.
     """
-    spec = spec_for("fluida")
-    return "fluida" if spec and _lv2.has(spec.uri) else "fluidsynth"
+    return "fluida"
 
 
 def load_voices(
