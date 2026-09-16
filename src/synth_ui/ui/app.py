@@ -4,6 +4,7 @@ import threading
 import pygame
 
 from synth_ui.clients import EngineManager
+from synth_ui.clients.backlight import Backlight
 from synth_ui.clients.effects_catalog import (
     EffectCatalogEntry,
     annotate_effects,
@@ -14,6 +15,8 @@ from synth_ui.clients.rig import Rig, RigEffect, RigLibrary
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
+    BRIGHTNESS_FILE,
+    DEFAULT_BRIGHTNESS,
     DEFAULT_GAIN,
     DEFAULT_VOICE,
     EFFECTS_MANIFEST,
@@ -58,6 +61,29 @@ def _save_state(name: str) -> None:
         with open(STATE_FILE, "w") as f:
             f.write(name)
     except Exception:
+        pass
+
+
+def _load_brightness() -> float:
+    """Saved screen brightness as a 0..1 fraction, defaulting to full.
+
+    Anything unreadable or out of range reads as the default rather than as an
+    error: a corrupt file must not leave the instrument booting to a black
+    screen it has no way to recover from.
+    """
+    try:
+        with open(BRIGHTNESS_FILE) as f:
+            value = float(f.read().strip())
+    except (OSError, ValueError):
+        return DEFAULT_BRIGHTNESS
+    return value if 0.0 <= value <= 1.0 else DEFAULT_BRIGHTNESS
+
+
+def _save_brightness(fraction: float) -> None:
+    try:
+        with open(BRIGHTNESS_FILE, "w") as f:
+            f.write(f"{fraction:.3f}")
+    except OSError:
         pass
 
 
@@ -143,6 +169,13 @@ class SynthUI:
             on_program=self._select_rig_by_index if MIDI_PROGRAM_SELECTS_RIG else None,
         )
         self._midi_control.start()
+
+        # Restore the panel brightness before anything is drawn, so the first
+        # thing on screen is already at the level the player left it.
+        self._backlight = Backlight()
+        self._brightness = _load_brightness()
+        if self._backlight.available:
+            self._backlight.set_fraction(self._brightness)
 
         self.screen: Screen = SplashScreen()
         self._splash_start = pygame.time.get_ticks()
@@ -269,6 +302,7 @@ class SynthUI:
             return
         if self._effects_screen is not None:
             rig.trim_db = self._effects_screen.trim_slider.value
+            rig.fixed_velocity = self._effects_screen.fixed_velocity
         # Carry params and bypass, not just the URI. Saving the chain without
         # what was dialled into it is the same as not saving it.
         rig.effects = [
@@ -303,8 +337,27 @@ class SynthUI:
             current_id=self._engine.current_audio_device(),
             on_select=self._on_audio_selected,
             on_back=self._show_home,
+            # Both None on a board with no backlight, which hides the slider
+            # rather than showing one that does nothing.
+            on_brightness=(
+                self._on_brightness if self._backlight.available else None
+            ),
+            initial_brightness=(
+                self._brightness if self._backlight.available else None
+            ),
         )
         self.screen = self._audio_screen
+
+    def _on_brightness(self, fraction: float) -> None:
+        """Applied live while dragging; saved on each change.
+
+        Saving every event is cheap (one short file) and worth it: the
+        instrument is powered down by pulling the plug, so there is no shutdown
+        hook to write it in.
+        """
+        self._brightness = fraction
+        self._backlight.set_fraction(fraction)
+        _save_brightness(fraction)
 
     def _on_audio_selected(self, card_id: str) -> None:
         # Restarting jack + rebuilding the voice takes seconds — do it off the UI
@@ -339,7 +392,15 @@ class SynthUI:
             on_trim_change=self._engine.set_rig_trim,
             on_reorder=self._on_reorder_effects,
             on_change_instrument=self._show_instrument_swap,
+            # None hides the control on a board that can't do it, rather than
+            # offering a button that silently fails.
+            on_fixed_velocity=(
+                self._engine.set_fixed_velocity
+                if self._engine.fixed_velocity_available()
+                else None
+            ),
             initial_trim=rig.trim_db if rig is not None else 0.0,
+            initial_fixed_velocity=rig.fixed_velocity if rig is not None else False,
             source_name=rig.voice if rig is not None else "",
             rig_name=rig.name if rig is not None else "",
         )

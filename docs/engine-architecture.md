@@ -112,8 +112,11 @@ raw RT floor, and the xrun counter over a sustained voice-*switching* session
 
 ```
  a2j:<keyboard capture>   (USB) ─┐
-                                 ├──MIDI──▶  <active engine>:midi_in
- ttymidi:MIDI_in     (5-pin DIN) ─┘               │ audio out
+                                 ├──MIDI──▶ [ velocity filter ]  ← optional, lazy
+ ttymidi:MIDI_in     (5-pin DIN) ─┘                   │
+                                                      ▼
+                                          <active engine>:midi_in
+                                                  │ audio out
                                                   ▼
                               [ effects rack (mod-host) ]   ← optional, persistent
                                          │
@@ -201,6 +204,43 @@ not autoconnect by default — so mod-host voices are likely silent today and
 fluidsynth relies on luck. Audio patching becomes an explicit EngineManager
 responsibility (Phase 2), and fluidsynth gets `audio.jack.autoconnect=1` now
 (Phase 1).
+
+### Fixed velocity — `VelocityFilter`
+
+A rig can play every note at one velocity instead of as struck
+(`Rig.fixed_velocity`, toggled from the rig editor's header). Since notes never
+pass through Python, that means rewriting a byte of every note-on in the RT
+path, so it is an LV2 plugin in mod-host — x42's
+`midifilter#velocityscale`, which ships in `x42-plugins` (already in
+`00-packages`; nothing new to build).
+
+It is the MIDI-side mirror of the master chain: a single-purpose stage the user
+never assembles, sitting at the head of the path rather than the tail, at
+mod-host instance **100** (instruments 0-9, effects 10-89, master 90+, MIDI
+filters 100+). `EngineManager._midi_sources()` answers "what feeds the
+instrument" the way `_sinks()` answers "where does its audio go", so neither
+`_wire` nor `_unwire` has to know whether a filter exists.
+
+Three decisions worth not re-litigating (the reasoning is in
+`clients/velocity_filter.py`):
+
+- **Loaded lazily**, unlike the master chain — a board that never uses this
+  never carries the plugin. The master chain is always needed; this isn't.
+- **Off is identity parameters, not removal.** `onmin=1, onmax=127` is an exact
+  identity in midifilter's arithmetic, and `onmin == onmax == V` pins every
+  note-on to V. Removing the plugin on every toggle would rebuild the
+  keyboard→instrument leg each time, and while both the direct and the filtered
+  edge exist every note sounds twice.
+- **`bypass` is not used for it.** mod-host's bypass copies input buffers to
+  output, which is defined for audio; whether it forwards MIDI is not something
+  to bet the keyboard on.
+
+**Not yet measured on hardware:** the added latency. The filter is a second JACK
+client in series, but both it and the instrument live in the same mod-host
+process and JACK runs serial clients in dependency order within one period, so
+the expected cost is ~0 — worth confirming with `tools/midi_latency.py` before
+trusting it in a set, given how much trouble MIDI latency has already been on
+this box (see the FP-10 note in CLAUDE.md).
 
 ## Audio device selection (which card JACK opens)
 

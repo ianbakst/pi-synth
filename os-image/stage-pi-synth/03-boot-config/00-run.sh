@@ -41,6 +41,11 @@ else
 fi
 
 # --- cm5 only: DSI touchscreen (Waveshare Nano board) ---
+# The panel is a Waveshare 4.3" DSI, but the overlay is the *7-inch* one. That
+# is what Waveshare's own documentation specifies: the 4.3" panel shares the
+# official 7" display's timings and 800x480 resolution. The mismatched name is
+# correct — do not "fix" it to a 4.3-inch overlay.
+#
 # Confirmed on hardware: on this SoC generation (BCM2712's RP1 DSI driver),
 # display_auto_detect alone hung/crashed the board with this panel connected
 # (required a re-flash to recover — see docs/engine-architecture.md history).

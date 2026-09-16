@@ -53,6 +53,12 @@ class Rig:
     # Offset on top of the voice's calibrated trim — the "by ear" nudge that
     # measured loudness can't give you. See tools/calibrate_levels.py.
     trim_db: float = 0.0
+    # Play every note at config.FIXED_VELOCITY instead of as struck. A rig
+    # setting rather than a voice one, because it's a decision about the part
+    # being played, not about the instrument: the same organ wants flat velocity
+    # for a sustained pad and the keyboard's own dynamics for a solo.
+    # See clients/velocity_filter.py.
+    fixed_velocity: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -63,6 +69,7 @@ class Rig:
                 for e in self.effects
             ],
             "trim_db": self.trim_db,
+            "fixed_velocity": self.fixed_velocity,
         }
 
     @staticmethod
@@ -79,6 +86,7 @@ class Rig:
                 for e in entry.get("effects", [])
             ],
             trim_db=float(entry.get("trim_db", 0.0)),
+            fixed_velocity=bool(entry.get("fixed_velocity", False)),
         )
 
 

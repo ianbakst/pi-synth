@@ -26,6 +26,7 @@ def test_round_trips_through_the_store(tmp_path):
             voice="Hammond B3",
             effects=[RigEffect(REVERB, {"decay": 2.5})],
             trim_db=-1.5,
+            fixed_velocity=True,
         ),
         Rig(name="Dry Piano", voice="MDA Piano"),
     ]
@@ -34,7 +35,17 @@ def test_round_trips_through_the_store(tmp_path):
     assert [r.name for r in back] == ["Gospel B3", "Dry Piano"]
     assert back[0].effects[0].params == {"decay": 2.5}
     assert back[0].trim_db == -1.5
+    assert back[0].fixed_velocity is True
     assert back[1].effects == []
+    assert back[1].fixed_velocity is False
+
+
+def test_rigs_saved_before_fixed_velocity_existed_still_load(tmp_path):
+    # The rig store is the user's own work and outlives the feature set that
+    # wrote it: an older file has no such key and must read as "as struck".
+    path = tmp_path / "rigs.json"
+    path.write_text('[{"name": "Old", "voice": "MDA Piano", "trim_db": 0.0}]')
+    assert read_rigs(str(path))[0].fixed_velocity is False
 
 
 def test_missing_store_is_not_an_error(tmp_path):

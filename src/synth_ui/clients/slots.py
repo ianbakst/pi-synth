@@ -14,9 +14,10 @@ Two kinds of voice, because RAM is finite:
     RAM budget, so they share one scratch slot and pay the load cost on switch.
     That's the same behaviour as before, confined to the voices that need it.
 
-Slot numbering lives inside the instrument range (0-9); effects own 10-89 and
-the master chain 90+. When resident voices outnumber the slots, the
-least-recently-used one is evicted — bounded memory, no configuration.
+Slot numbering lives inside the instrument range (0-9); effects own 10-89, the
+master chain 90+, and MIDI filters 100+. When resident voices outnumber the
+slots, the least-recently-used one is evicted — bounded memory, no
+configuration.
 """
 
 from __future__ import annotations

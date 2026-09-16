@@ -23,6 +23,10 @@ RIGS_FILE = os.path.expanduser("~/.synth-rigs.json")
 # voices.json, and most voices (the split GM set) have no manifest entry to
 # write a number into anyway. See clients/trims.py.
 TRIMS_FILE = os.path.expanduser("~/.synth-trims.json")
+# Screen brightness, 0.0-1.0 of the panel's range. Per-unit like the rest of the
+# $HOME state: it depends on where the instrument is played, not on the build.
+BRIGHTNESS_FILE = os.path.expanduser("~/.synth-brightness")
+DEFAULT_BRIGHTNESS = 1.0
 
 # --- Hands-free rig switching (clients/midi_control.py) ---
 # Control Change numbers a footswitch sends to step through rigs. 80 and 81 are
@@ -83,6 +87,14 @@ DEFAULT_GAIN = 3.5
 # voice is actually limited, and the user's volume goes *after* it (level_out)
 # so turning down doesn't change how the limiter behaves. They're two different
 # jobs and Calf gives us a port for each.
+# --- Fixed velocity (per rig; see clients/velocity_filter.py) ---
+# What a rig with `fixed_velocity` set sends for every note-on, ignoring how
+# hard the key was actually struck. 100 rather than 127: it sits in the upper
+# part of most sampled instruments' velocity layers without pinning them to the
+# hardest, brightest one, which on a piano library is a hammer strike and on an
+# organ is indistinguishable from any other value.
+FIXED_VELOCITY = 100
+
 MASTER_LIMITER_URI = "http://calf.sourceforge.net/plugins/Limiter"
 MASTER_CHAIN: list[dict] = [
     {

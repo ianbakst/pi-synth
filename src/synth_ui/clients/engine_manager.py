@@ -32,8 +32,9 @@ from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import Rig, plan
 from synth_ui.clients.slots import InstrumentSlots
+from synth_ui.clients.velocity_filter import VelocityFilter
 from synth_ui.clients.voice import Voice
-from synth_ui.config import AUDIO_DEVICE_FILE, MASTER_CHAIN, MAX_GAIN
+from synth_ui.config import AUDIO_DEVICE_FILE, FIXED_VELOCITY, MASTER_CHAIN, MAX_GAIN
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,10 @@ class EngineManager:
         self._effects = EffectsRack(
             self._jack, self._mod_host, sink=sink_for(self._master, self._jack)
         )
+        # The head of the MIDI path, for rigs that play at a fixed velocity.
+        # Unlike the master chain this is loaded lazily — on the first rig that
+        # asks for it — so a board that never uses it never carries the plugin.
+        self._velocity = VelocityFilter(self._jack, self._mod_host)
         # mod-host now hosts the master chain, so it must stay up for the whole
         # session — never stopped when switching away from a mod-host
         # instrument. Stopping it would take the master chain (and the rack)
@@ -134,6 +139,10 @@ class EngineManager:
         self._started = True
         self._ctx.systemctl(["sudo", "systemctl", "start", _MOD_HOST_UNIT])
         self._clear_host()
+        # _clear_host just removed the filter along with everything else, so the
+        # bookkeeping has to forget it too — believing it is loaded when it
+        # isn't points _midi_sources() at a dead port.
+        self._velocity.teardown()
         # A freshly-started mod-host accepts TCP before it has finished scanning
         # the LV2 world, so the first plugin adds can bounce. Retry the load
         # itself, not just the connect — same race ModHostEngine handles.
@@ -225,6 +234,9 @@ class EngineManager:
         effect that is about to move."""
         self._effects.apply(plan(self._effects.snapshot(), rig.effects))
         ok = self.load_voice(voice)
+        # After load_voice, which is what makes an instrument active for the
+        # filter to be patched in front of.
+        self.set_fixed_velocity(rig.fixed_velocity)
         # Rig trim sits on top of the voice's calibrated trim: the measured
         # value matches instruments to each other, the rig value is the by-ear
         # nudge for this particular sound.
@@ -239,6 +251,48 @@ class EngineManager:
         self._rig_trim_db = db
         voice_trim = self._active.voice.gain_trim_db if self._active else 0.0
         self._master.set_trim_db(voice_trim + db)
+
+    def fixed_velocity_available(self) -> bool:
+        """Whether this board can flatten velocity — i.e. whether x42-plugins is
+        installed. False is a reason for the UI to hide the control, not an
+        error: everything else about the rig still works."""
+        return self._velocity.available
+
+    def set_fixed_velocity(self, enabled: bool) -> bool:
+        """Play every note at config.FIXED_VELOCITY, or as struck.
+
+        Enabling the first time loads the filter and moves the keyboards behind
+        it; after that both directions are a parameter change. Returns whether
+        the setting is actually in force, so a rig asking for something this
+        board can't do doesn't report success."""
+        if enabled and not self._insert_velocity_filter():
+            return False
+        self._velocity.set_fixed(FIXED_VELOCITY if enabled else 0)
+        return not enabled or self._velocity.is_loaded
+
+    def _insert_velocity_filter(self) -> bool:
+        """Put the filter between the keyboards and the instrument.
+
+        Only ever runs once per session — see velocity_filter.py on why the
+        filter stays in the path once it's in. The disconnect matters: _wire()
+        adds the filtered edge but cannot know the direct keyboard->instrument
+        edges it replaces are still there, and while both exist every note
+        sounds twice.
+        """
+        if self._velocity.is_loaded:
+            return True
+        if not self._velocity.ensure():
+            return False
+
+        keyboards = self._jack.keyboard_midi_sources()
+        self._velocity.attach(keyboards)
+        if self._active is not None:
+            self._wire(self._active)
+            midi_in = self._active.midi_port
+            if midi_in:
+                for src in keyboards:
+                    self._jack.disconnect(src, midi_in)
+        return True
 
     def set_gain(self, gain: float) -> None:
         """Master volume, in slider units. Applies to every voice — previously
@@ -291,6 +345,10 @@ class EngineManager:
         (mod-host/a2jmidid cycle via PartOf); the previous voice is rebuilt on the
         new server."""
         voice = self._active.voice if self._active is not None else None
+        # Survives the restart with the voice: the card you play through has
+        # nothing to do with how the rig treats velocity, and coming back with
+        # dynamics silently switched on mid-set would be its own bug.
+        was_fixed = bool(self._velocity.velocity)
         if self._active is not None:
             self._active.panic()
             self._active.stop()
@@ -309,11 +367,19 @@ class EngineManager:
         # that no longer hold anything.
         self._slots.clear()
         self._master.teardown()
+        # The filter went with mod-host too. It has to be forgotten before it
+        # can be rebuilt: otherwise _midi_sources() keeps naming a port that no
+        # longer exists, and the instrument is wired to nothing — silence.
+        self._velocity.teardown()
         self.start()
         self._master.set_volume_db(self._volume_db)
 
         if voice is not None:
-            return self.load_voice(voice)
+            ok = self.load_voice(voice)
+            # After load_voice, so there is an active instrument to insert the
+            # filter in front of.
+            self.set_fixed_velocity(was_fixed)
+            return ok
         return True
 
     def _wait_audio_stack(self, timeout: float = _AUDIO_STACK_TIMEOUT) -> bool:
@@ -388,7 +454,7 @@ class EngineManager:
         lands on the same instance doesn't disconnect what was just wired."""
         keep_outs = set(keep.audio_out_ports)
         if midi_port and midi_port != keep.midi_port:
-            for src in self._jack.keyboard_midi_sources():
+            for src in self._midi_sources():
                 self._jack.disconnect(src, midi_port)
         sinks = self._sinks()
         for src in audio_outs:
@@ -403,9 +469,14 @@ class EngineManager:
         output -> DAC leg is owned by EffectsRack._rechain, not here).
         Idempotent — also the hook that re-establishes this leg after a rack
         mutation changes which effect is first in the chain."""
+        # Keyboards feed the velocity filter when it's in the path, and the
+        # instrument directly when it isn't. Re-attached on every wire so a
+        # keyboard unplugged and plugged back in — a new JACK port — is picked
+        # up without a restart, which is what this loop has always been for.
+        self._velocity.attach(self._jack.keyboard_midi_sources())
         midi_in = engine.midi_port
         if midi_in:
-            for src in self._jack.keyboard_midi_sources():
+            for src in self._midi_sources():
                 self._jack.connect(src, midi_in)
         else:
             logger.warning("no MIDI input port found for engine '%s'", engine.key)
@@ -426,6 +497,18 @@ class EngineManager:
         if self._effects.is_empty():
             return self._master.input_ports() or self._jack.dac_sinks()
         return self._effects.input_ports()
+
+    def _midi_sources(self) -> list[str]:
+        """What feeds the active instrument's MIDI input: the velocity filter's
+        output if it's in the path, otherwise the keyboards themselves.
+
+        The MIDI-side counterpart of _sinks() — one place that answers "what is
+        upstream of the instrument", so neither _wire nor _unwire has to know
+        whether a filter exists."""
+        filtered = self._velocity.output_port()
+        if filtered:
+            return [filtered]
+        return self._jack.keyboard_midi_sources()
 
     def _is_active(self, key: str) -> bool:
         return self._active is not None and self._active.key == key

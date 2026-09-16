@@ -1,0 +1,14 @@
+# Let the UI (running as 'synth', a member of 'video') set screen brightness.
+#
+# /sys/class/backlight/*/brightness is created root-owned 0644, so without this
+# the brightness slider is visible but inert. A udev rule is the right tool here
+# rather than a sudoers entry: brightness is dragged live, and shelling out to
+# sudo per motion event would be absurd.
+#
+# Both the chgrp and the chmod are needed — group ownership alone doesn't grant
+# write against a 0644 attribute.
+#
+# One `sh -c` rather than two RUN+= lines so the pair either both apply or
+# neither does, and so PATH resolves chgrp/chmod wherever usrmerge put them.
+SUBSYSTEM=="backlight", ACTION=="add", \
+  RUN+="/bin/sh -c 'chgrp video /sys/class/backlight/%k/brightness && chmod g+w /sys/class/backlight/%k/brightness'"

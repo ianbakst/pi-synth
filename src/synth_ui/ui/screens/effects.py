@@ -41,7 +41,9 @@ class EffectsScreen(Screen):
         on_trim_change: Callable[[float], None] | None = None,
         on_reorder: Callable[[int, int], None] | None = None,
         on_change_instrument: Callable | None = None,
+        on_fixed_velocity: Callable[[bool], None] | None = None,
         initial_trim: float = 0.0,
+        initial_fixed_velocity: bool = False,
         source_name: str = "",
         rig_name: str = "",
     ):
@@ -59,6 +61,22 @@ class EffectsScreen(Screen):
             on_action=on_add,
         )
         self.header.name = rig_name or "Chain"
+
+        # Velocity is a rig setting like trim, but it has two states rather than
+        # a range, so it goes in the header as a button that reads out its own
+        # state instead of costing the chain another 96px fader column. Added
+        # after "Add" so it renders to the left of it and the button that was
+        # always rightmost stays rightmost.
+        self.fixed_velocity = initial_fixed_velocity
+        self._on_fixed_velocity = on_fixed_velocity
+        self._velocity_action: int | None = None
+        # Absent on a board without x42-plugins, where the control would be a
+        # button that does nothing. See EngineManager.fixed_velocity_available.
+        if on_fixed_velocity is not None:
+            self._velocity_action = len(self.header.actions)
+            self.header.actions.append(
+                (self._velocity_label(), self._toggle_fixed_velocity)
+            )
 
         # Trim runs down the right edge, matching the rigs screen — and giving
         # the chain the full height it needs for three rows of blocks.
@@ -90,6 +108,22 @@ class EffectsScreen(Screen):
             orientation=VerticalOrientation(),
         )
         self.components = (self.header, self.chain, self.trim_slider)
+
+    def _velocity_label(self) -> str:
+        """Names the state, not the action. A button labelled "Fixed" is
+        ambiguous about whether that is what it does or what it already is —
+        and this one is read at a glance, mid-song."""
+        return "Vel: Fixed" if self.fixed_velocity else "Vel: Played"
+
+    def _toggle_fixed_velocity(self) -> None:
+        self.fixed_velocity = not self.fixed_velocity
+        if self._velocity_action is not None:
+            self.header.actions[self._velocity_action] = (
+                self._velocity_label(),
+                self._toggle_fixed_velocity,
+            )
+        if self._on_fixed_velocity is not None:
+            self._on_fixed_velocity(self.fixed_velocity)
 
 
 class EffectsCatalogScreen(Screen):

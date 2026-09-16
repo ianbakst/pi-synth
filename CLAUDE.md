@@ -39,7 +39,14 @@ DIN jack ──> ttymidi ───────┘                  │
   - VIN → 5V (pin 2), GND → pin 6, SCK pad shorted to ground
   - `dtoverlay=hifiberry-dac`; ALSA device `hw:sndrpihifiberry`
     (**by name — the number shifts at boot**)
-- **Display:** 3.5" touchscreen, 800×480, ft5x06 at `/dev/input/event4`
+- **Display:** Waveshare 4.3" DSI touchscreen, 800×480, ft5x06 touch controller
+  at `/dev/input/event4`. Driven by `dtoverlay=vc4-kms-dsi-7inch` — the **7-inch**
+  overlay on a 4.3-inch panel, which is what Waveshare's own documentation
+  specifies: the panel shares the official 7" display's timings and resolution.
+  The mismatched name is correct; do not "fix" it to a 4.3-inch overlay.
+  Backlight is controllable at `/sys/class/backlight/0-0045` (0–255); the image
+  installs a udev rule giving the `video` group write access so the UI can dim
+  it. See `clients/backlight.py`.
 - **User account:** `synth`
 
 ### MIDI inputs
@@ -156,6 +163,7 @@ These live in `$HOME` on the board and are **not** overwritten by a deploy:
 | `~/.synth-trims.json` | Per-voice levels measured by `tools/calibrate_levels` |
 | `~/.synth-audio-device` | Selected ALSA card |
 | `~/.synth-state` | Last active rig |
+| `~/.synth-brightness` | Screen brightness, 0.0–1.0 |
 
 ### Tools
 

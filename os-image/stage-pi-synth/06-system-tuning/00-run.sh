@@ -7,6 +7,12 @@
 # RT limits for login/interactive sessions.
 install -m 644 files/audio-rt.conf "${ROOTFS_DIR}/etc/security/limits.d/audio-rt.conf"
 
+# Screen brightness: the DSI panel's backlight node is root-owned, so the UI
+# can't dim the screen without this. See clients/backlight.py.
+mkdir -p "${ROOTFS_DIR}/etc/udev/rules.d"
+install -m 644 files/99-backlight.rules \
+	"${ROOTFS_DIR}/etc/udev/rules.d/99-backlight.rules"
+
 # RAM-only journal.
 mkdir -p "${ROOTFS_DIR}/etc/systemd/journald.conf.d"
 install -m 644 files/journald-volatile.conf \

@@ -12,6 +12,7 @@ from synth_ui.clients.engine_manager import EngineManager
 from synth_ui.clients.master_chain import sink_for
 from synth_ui.clients.rig import Rig, RigEffect
 from synth_ui.clients.slots import InstrumentSlots
+from synth_ui.clients.velocity_filter import VelocityFilter
 from synth_ui.clients.voice import Voice
 
 APLAY = (
@@ -158,12 +159,25 @@ class FakeMaster:
         self.trim_db = db
 
 
-def make_mgr(jack=None, master=None):
+VELOCITY_PORTS = {
+    ("effect_100", "midi", False): ["effect_100:midiin"],
+    ("effect_100", "midi", True): ["effect_100:midiout"],
+}
+
+
+def fake_world(installed=True):
+    w = MagicMock()
+    w.has.return_value = installed
+    return w
+
+
+def make_mgr(jack=None, master=None, velocity_installed=True):
     EVENTS.clear()
     # start_timeout=0: no master-chain bring-up retry loop in tests.
     m = EngineManager(start_timeout=0)
     m._jack = jack or FakeJack()
     m._mod_host = MagicMock()
+    m._mod_host.load_plugin.return_value = True
     m._registry = {"fluidsynth": FluidFake, "sfizz": ModFake, "dexed": ModFake}
     # __init__ already built self._effects/_master/_slots against the pre-swap
     # real jack/mod_host; rebuild against the fakes so tests never touch real
@@ -172,6 +186,12 @@ def make_mgr(jack=None, master=None):
     m._ctx.slots = m._slots
     m._master = master or FakeMaster()
     m._effects = EffectsRack(m._jack, m._mod_host, sink=sink_for(m._master, m._jack))
+    # Injected rather than left real: LV2World is optimistic when it can't run
+    # lv2ls, so on a dev machine the filter would report itself available and
+    # the tests would depend on whether x42-plugins happens to be installed.
+    m._velocity = VelocityFilter(
+        m._jack, m._mod_host, lv2=fake_world(velocity_installed)
+    )
     m._ctx.mod_host_needed = lambda: True
     return m
 
@@ -609,3 +629,94 @@ def test_start_on_a_fresh_mod_host_removes_nothing():
     m = make_mgr(FakeJack(), master=FakeMaster(ready=True))
     m.start()
     m._mod_host.remove_plugin.assert_not_called()
+
+
+# --- fixed velocity (MIDI path) ---------------------------------------------
+
+def test_fixed_velocity_is_unavailable_without_the_plugin():
+    m = make_mgr(velocity_installed=False)
+    assert m.fixed_velocity_available() is False
+    assert m.set_fixed_velocity(True) is False
+
+
+def test_the_filter_is_not_loaded_until_a_rig_asks_for_it():
+    # A board that never uses this must not carry an extra RT plugin: the whole
+    # reason the filter is lazy and the master chain isn't.
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    m.load_voice(GM)
+    assert m._velocity.is_loaded is False
+    assert (KBD, "fluidsynth:midi") in jack.connects
+
+
+def test_enabling_puts_the_filter_between_keyboard_and_instrument():
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    m.load_voice(GM)
+    assert m.set_fixed_velocity(True) is True
+    assert (KBD, "effect_100:midiin") in jack.connects
+    assert ("effect_100:midiout", "fluidsynth:midi") in jack.connects
+
+
+def test_enabling_drops_the_direct_keyboard_edge_it_replaces():
+    # The bug this exists to prevent: with both the raw and the filtered edge
+    # live, every note sounds twice — once as struck, once flattened.
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    m.load_voice(GM)
+    m.set_fixed_velocity(True)
+    assert ("disconnect", KBD, "fluidsynth:midi") in EVENTS
+    assert (KBD, "fluidsynth:midi") not in jack.connects
+
+
+def test_disabling_keeps_the_filter_in_the_path():
+    # Off is identity parameters, not removal — see velocity_filter.py. Taking
+    # it out would re-open the double-note window on every toggle.
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    m.load_voice(GM)
+    m.set_fixed_velocity(True)
+    assert m.set_fixed_velocity(False) is True
+    assert m._velocity.is_loaded is True
+    assert m._velocity.velocity == 0
+    assert ("effect_100:midiout", "fluidsynth:midi") in jack.connects
+
+
+def test_switching_voices_moves_the_filter_output_not_the_keyboard():
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    m.load_voice(GM)
+    m.set_fixed_velocity(True)
+    m.load_voice(SFIZZ)
+    assert ("effect_100:midiout", "mod-host:midi_in") in jack.connects
+    assert ("disconnect", "effect_100:midiout", "fluidsynth:midi") in EVENTS
+    # The keyboard leg belongs to the filter now and must not be torn down with
+    # the outgoing instrument.
+    assert (KBD, "effect_100:midiin") in jack.connects
+
+
+def test_loading_a_rig_applies_its_velocity_setting():
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    rig = Rig(name="Pad", voice="GM", fixed_velocity=True)
+    assert m.load_rig(rig, GM) is True
+    assert m._velocity.velocity > 0
+    assert ("effect_100:midiout", "fluidsynth:midi") in jack.connects
+
+
+def test_loading_a_rig_without_the_setting_turns_it_back_off():
+    # Rigs are switched with a footswitch mid-song; a setting that leaked from
+    # the previous rig would flatten a piano part without being asked.
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack)
+    m.load_rig(Rig(name="Pad", voice="GM", fixed_velocity=True), GM)
+    m.load_rig(Rig(name="Piano", voice="GM2"), GM2)
+    assert m._velocity.velocity == 0
+
+
+def test_a_rig_asking_for_velocity_this_board_cannot_do_still_loads():
+    jack = FakeJack(ports=VELOCITY_PORTS)
+    m = make_mgr(jack, velocity_installed=False)
+    rig = Rig(name="Pad", voice="GM", fixed_velocity=True)
+    assert m.load_rig(rig, GM) is True
+    assert (KBD, "fluidsynth:midi") in jack.connects

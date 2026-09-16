@@ -126,7 +126,7 @@ def test_every_attribute_the_app_touches_on_effects_screen_exists():
     """A cheap backstop for the whole class of rename bug: the screen is built
     the way the app builds it, and the names the app uses are asserted."""
     screen = _ui([Effect(10, "urn:rev")])._effects_screen
-    for attribute in ("chain", "trim_slider", "header"):
+    for attribute in ("chain", "trim_slider", "header", "fixed_velocity"):
         assert hasattr(screen, attribute), attribute
 
 
@@ -174,3 +174,64 @@ def test_swapping_with_no_active_rig_does_nothing():
     ui = _ui([])
     ui._home = StubHome(None)
     ui._swap_instrument(Voice("X", "modhost", "", "Piano"))
+
+
+# --- fixed velocity toggle --------------------------------------------------
+
+def _velocity_screen(initial=False, handler=None):
+    return EffectsScreen(
+        effects=[],
+        catalog=CATALOG,
+        on_remove=lambda i: None,
+        on_add=lambda i=None: None,
+        on_back=lambda: None,
+        on_fixed_velocity=handler or (lambda enabled: None),
+        initial_fixed_velocity=initial,
+        source_name="Rhodes EP",
+    )
+
+
+def test_velocity_button_reads_out_its_state():
+    screen = _velocity_screen()
+    labels = [label for label, _cb in screen.header.actions]
+    assert "Vel: Played" in labels
+    screen._toggle_fixed_velocity()
+    labels = [label for label, _cb in screen.header.actions]
+    assert "Vel: Fixed" in labels and "Vel: Played" not in labels
+
+
+def test_velocity_button_keeps_add_rightmost():
+    # Header actions render right-to-left, first in the list is rightmost. The
+    # button that was always under your thumb should stay there.
+    screen = _velocity_screen()
+    assert screen.header.actions[0][0] == "Add"
+
+
+def test_toggling_reaches_the_engine():
+    seen: list[bool] = []
+    screen = _velocity_screen(handler=seen.append)
+    screen._toggle_fixed_velocity()
+    screen._toggle_fixed_velocity()
+    assert seen == [True, False]
+
+
+def test_the_button_is_absent_when_the_board_cannot_do_it():
+    # app.py passes on_fixed_velocity=None when x42-plugins isn't installed;
+    # a button that silently does nothing is worse than no button.
+    screen = EffectsScreen(
+        effects=[],
+        catalog=CATALOG,
+        on_remove=lambda i: None,
+        on_add=lambda i=None: None,
+        on_back=lambda: None,
+        source_name="Rhodes EP",
+    )
+    assert [label for label, _cb in screen.header.actions] == ["Add"]
+    # Still readable by _sync_active_rig_effects, which doesn't know or care.
+    assert screen.fixed_velocity is False
+
+
+def test_an_enabled_rig_opens_the_editor_showing_fixed():
+    screen = _velocity_screen(initial=True)
+    assert screen.fixed_velocity is True
+    assert [label for label, _cb in screen.header.actions][1] == "Vel: Fixed"
