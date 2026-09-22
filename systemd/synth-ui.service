@@ -20,6 +20,11 @@ RestartSec=2
 # ignored by SDL2 (pygame 2). SDL2 uses KMSDRM for video and auto-scans
 # /dev/input/event* for touch — the UI user just needs to be in the 'input'
 # group. Do not re-add them; they only create a false "event4" mental model.
+#
+# Nor SDL_KMSDRM_DEVICE_INDEX. Which DRM card the panel is on is probe order and
+# changes; the UI resolves it by name from /dev/dri/by-path before pygame.init()
+# (clients/display_device.py). Setting it here overrides that — useful to force
+# the UI onto an HDMI monitor, wrong for anything else.
 RuntimeDirectory=synth-ui
 Environment=XDG_RUNTIME_DIR=/run/synth-ui
 

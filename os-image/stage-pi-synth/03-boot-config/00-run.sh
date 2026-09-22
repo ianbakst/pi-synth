@@ -40,6 +40,31 @@ else
 	echo "config.txt: no vc4-kms-v3d overlay — HDMI audio not present to disable"
 fi
 
+# --- cm5 only: disable the HDMI outputs themselves ---
+# The panel is the only display this box has. Leaving HDMI on leaves two extra
+# connectors for anything enumerating outputs to trip over, and on BCM2712 the
+# DSI panel is on a *different* DRM card from the HDMI/display engine, so the
+# extra card is pure ambiguity. `nohdmi0,nohdmi1` drops both; what remains on
+# vc4-drm is a pair of Writeback connectors, and the panel's own card is
+# untouched. Verified on hardware -- these params are accepted by the -pi5
+# variant that the firmware substitutes for vc4-kms-v3d on 2712.
+#
+# NOT applied to pi4: there DSI and HDMI share one unified card, and losing HDMI
+# costs you the ability to plug in a monitor to debug a board whose panel is
+# misbehaving -- which is exactly when you need it.
+#
+# This is a tidiness measure, not a correctness one. The UI finds the panel's
+# card by name either way (clients/display_device.py); do not let this line grow
+# back into load-bearing.
+if [ "${PI_SYNTH_BOARD:-pi4}" = "cm5" ] && grep -qE "^dtoverlay=vc4-kms-v3d" "${CONFIG}"; then
+	if ! grep -qE "^dtoverlay=vc4-kms-v3d[^[:space:]]*nohdmi" "${CONFIG}"; then
+		sed -i -E "s/^(dtoverlay=vc4-kms-v3d[^[:space:]]*)/\1,nohdmi0,nohdmi1/" "${CONFIG}"
+		echo "config.txt: disabled HDMI outputs (nohdmi0,nohdmi1)"
+	else
+		echo "config.txt: HDMI outputs already disabled"
+	fi
+fi
+
 # --- cm5 only: DSI touchscreen (Waveshare Nano board) ---
 # The panel is a Waveshare 4.3" DSI, but the overlay is the *7-inch* one. That
 # is what Waveshare's own documentation specifies: the 4.3" panel shares the
@@ -62,8 +87,13 @@ if [ "${PI_SYNTH_BOARD:-pi4}" = "cm5" ]; then
 		cat >> "${CONFIG}" << 'EOF'
 
 # --- pi-synth: cm5 DSI touchscreen ---
+# NOTE: dsi1 here must match which physical DSI connector the ribbon is in.
+# With display_auto_detect=0 there is no fallback -- the wrong one gives you a
+# lit backlight and no image, which reads like a software fault and isn't. To
+# check a board: `ls /sys/class/drm/card*-*` should show a DSI connector that is
+# `connected`, and /sys/class/backlight should have a device.
 display_auto_detect=0
-dtoverlay=vc4-kms-dsi-7inch,dsi0
+dtoverlay=vc4-kms-dsi-7inch,dsi1
 EOF
 		echo "config.txt: added cm5 DSI touchscreen overlay, disabled auto-detect"
 	else

@@ -40,7 +40,13 @@ DIN jack ──> ttymidi ───────┘                  │
   - `dtoverlay=hifiberry-dac`; ALSA device `hw:sndrpihifiberry`
     (**by name — the number shifts at boot**)
 - **Display:** Waveshare 4.3" DSI touchscreen, 800×480, ft5x06 touch controller
-  at `/dev/input/event4`. Driven by `dtoverlay=vc4-kms-dsi-7inch` — the **7-inch**
+  on an auto-scanned `/dev/input/event*` node — **the number is not stable**
+  (it has been event2 and event4 on the same unit); SDL2 finds it by scanning,
+  and the UI user only needs to be in the `input` group. Likewise the panel's
+  DRM card: on CM5 the DSI panel, the GPU and the display engine are three
+  separate cards and the numbering is probe order, so the UI resolves it from
+  `/dev/dri/by-path/*.dsi-card` (`clients/display_device.py`). Never hardcode
+  either number. Driven by `dtoverlay=vc4-kms-dsi-7inch,dsi1` — the **7-inch**
   overlay on a 4.3-inch panel, which is what Waveshare's own documentation
   specifies: the panel shares the official 7" display's timings and resolution.
   The mismatched name is correct; do not "fix" it to a 4.3-inch overlay.
@@ -132,7 +138,10 @@ Already configured; do not change without measuring:
 3. **Core allocation**: JACK on core 1, instruments and effects on 2–3, all RT.
    The UI runs on core 0 with the OS at normal priority, `Nice=5` — never on an
    isolated core. See docs/engine-architecture.md.
-4. **The audio device is named, never numbered**: `hw:sndrpihifiberry`.
+4. **Devices are named, never numbered.** The DAC is `hw:sndrpihifiberry`, not
+   `hw:1`. The panel's DRM card comes from `/dev/dri/by-path/*.dsi-card`, not
+   `SDL_KMSDRM_DEVICE_INDEX=0`. The touchscreen is auto-scanned, not `event4`.
+   Every one of these numbers has already shifted underneath this project once.
 5. **Touch events are FINGERDOWN/FINGERMOTION/FINGERUP** with normalized
    coordinates; `ui/event.py` converts them to pixels once, at the edge.
 6. **mod-host instance ranges are fixed**: instruments 0–9 (9 is the scratch

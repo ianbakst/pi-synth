@@ -5,6 +5,7 @@ import pygame
 
 from synth_ui.clients import EngineManager
 from synth_ui.clients.backlight import Backlight
+from synth_ui.clients.display_device import select_kmsdrm_device
 from synth_ui.clients.effects_catalog import (
     EffectCatalogEntry,
     annotate_effects,
@@ -96,10 +97,15 @@ class SynthUI:
         # is disabled, fights jackd for it: continuous ALSA underruns and no
         # audio actually reaching the DAC. Must be set before pygame.init().
         os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
-        # No other SDL env setup needed: pygame 2 is SDL2, which uses KMSDRM for
-        # video and auto-scans /dev/input/event* for touch. Touch works as long as
-        # this process's user is in the 'input' group (see setup.sh). The old SDL
-        # 1.2 vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
+        # Pick the DRM card the panel is actually on. On CM5 the DSI panel and
+        # the GPU are separate DRM devices and SDL selects between them by a
+        # probe-order index, so this has to be resolved by name. Must be set
+        # before pygame.init(). See clients/display_device.py.
+        if IS_PI:
+            select_kmsdrm_device()
+        # Touch needs no SDL env setup: SDL2 auto-scans /dev/input/event* and
+        # works as long as this process's user is in the 'input' group. The old
+        # SDL 1.2 vars (SDL_FBDEV/SDL_MOUSEDEV/SDL_MOUSEDRV) are ignored by SDL2.
         pygame.init()
 
         if IS_PI:

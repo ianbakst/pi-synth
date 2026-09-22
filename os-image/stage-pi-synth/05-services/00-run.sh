@@ -18,24 +18,15 @@ for unit in cpu-performance jack a2jmidid ttymidi mod-host synth-ui; do
 		"${ROOTFS_DIR}/etc/systemd/system/${unit}.service"
 done
 
-# --- cm5 only: force SDL's KMSDRM backend onto the DSI card (card0) ---
-# Confirmed on hardware: on this SoC (BCM2712/RP1), DSI and the main GPU/HDMI
-# are on SEPARATE DRM devices (drm-rp1-dsi vs vc4-drm) -- unlike pi4, which has
-# one unified device. Without this, SDL only ever opened a GPU render node
-# (renderD128) and never a primary card node for the DSI device, so frames
-# rendered fine but never reached the physical screen: panel backlit, correct
-# 800x480 mode negotiated (matches SCREEN_W/SCREEN_H in config.py), but nothing
-# visible. Not needed for pi4 -- its single unified DRM device needs no
-# disambiguation.
-if [ "${PI_SYNTH_BOARD:-pi4}" = "cm5" ]; then
-	mkdir -p "${ROOTFS_DIR}/etc/systemd/system/synth-ui.service.d"
-	cat > "${ROOTFS_DIR}/etc/systemd/system/synth-ui.service.d/kmsdrm.conf" << 'EOF2'
-[Service]
-Environment=SDL_KMSDRM_DEVICE_INDEX=0
-EOF2
-	echo "synth-ui: added cm5 SDL_KMSDRM_DEVICE_INDEX=0 drop-in"
-fi
-
+# --- DRM card selection is NOT done here; see clients/display_device.py ---
+# On BCM2712/RP1 the DSI panel and the GPU are separate DRM devices (drm-rp1-dsi
+# vs v3d vs vc4-drm), unlike pi4's single unified one, and SDL picks between them
+# by a probe-order index. This used to ship a drop-in pinning
+# SDL_KMSDRM_DEVICE_INDEX=0, which was the panel when it was written and became
+# the GPU later -- a card with no connectors, so the UI crash-looped in
+# set_mode(). The UI now resolves the index from /dev/dri/by-path at startup.
+# Do not reintroduce a hardcoded index here; a stale one is worse than none,
+# because SDL's own auto-scan would at least have found the panel.
 on_chroot << 'EOF'
 set -e
 # Stock fluidsynth.service (Debian's packaged service) grabs the audio device.
