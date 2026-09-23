@@ -19,6 +19,7 @@ import logging
 import math
 import re
 import time
+from dataclasses import replace
 
 from synth_ui.clients.audio_devices import AudioDevices, Card
 from synth_ui.clients.constants import (
@@ -27,7 +28,7 @@ from synth_ui.clients.constants import (
 from synth_ui.clients.effects_rack import Effect, EffectsRack
 from synth_ui.clients.engine import ENGINE_REGISTRY, Engine, EngineContext
 from synth_ui.clients.jack_graph import JackGraph
-from synth_ui.clients.lv2 import ControlPort, control_ports
+from synth_ui.clients.lv2 import ControlPort, PortDefaults, control_ports, spec_for
 from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import Rig, plan
@@ -83,10 +84,14 @@ class EngineManager:
     ):
         self._mod_host = ModHostClient(host=mod_host_host, port=mod_host_port)
         self._jack = JackGraph()
+        # One cache of plugin control defaults for the whole session. Both the
+        # slots and the rack need it on the switch path, and reading it is an
+        # lv2info subprocess — two caches would mean scanning each plugin twice.
+        self._defaults = PortDefaults()
         # Instrument plugins stay loaded across switches; this owns which
         # instance holds what (see slots.py). Shared by every ModHostEngine, so
         # it has to outlive them — the manager owns it, not the engine.
-        self._slots = InstrumentSlots(self._mod_host)
+        self._slots = InstrumentSlots(self._mod_host, defaults=self._defaults)
         self._ctx = EngineContext(
             jack=self._jack,
             mod_host=self._mod_host,
@@ -104,7 +109,10 @@ class EngineManager:
         # second one — see effects_rack.py and docs/engine-architecture.md
         # "Effects rack"). Their tail feeds the master chain, not the DAC.
         self._effects = EffectsRack(
-            self._jack, self._mod_host, sink=sink_for(self._master, self._jack)
+            self._jack,
+            self._mod_host,
+            sink=sink_for(self._master, self._jack),
+            defaults=self._defaults,
         )
         # The head of the MIDI path, for rigs that play at a fixed velocity.
         # Unlike the master chain this is loaded lazily — on the first rig that
@@ -191,6 +199,12 @@ class EngineManager:
             logger.error("unknown engine: %s", voice.engine)
             return False
 
+        # Never the caller's object: a rig merges its own patch into the voice,
+        # and editing a control while playing writes to the loaded voice. Both
+        # would otherwise reach into the shared catalog and change an entry the
+        # image ships, for every rig, until reboot.
+        voice = replace(voice, params=dict(voice.params))
+
         # The output path has to exist before a voice is wired into it. Once
         # only — a missing master plugin must not re-run the 10s bring-up on
         # every voice change.
@@ -220,6 +234,41 @@ class EngineManager:
 
         return self._switch_to(engine_cls, voice)
 
+    def warm(self, voices: list[Voice]) -> int:
+        """Instantiate these voices' plugins now, so switching to them later is
+        a bypass flip and a re-patch rather than a plugin load.
+
+        This is what residency was built for, used deliberately: a song's set is
+        warmed on the way in, between songs, because instantiating a plugin can
+        cost an xrun and mid-show is the wrong moment to find that out.
+
+        Measured on a CM5: eight warmed instruments cost about 1.5% of one core
+        and no xruns. They are not free — mod-host calls `run()` on bypassed
+        plugins too, deliberately, so a bypassed delay's tail doesn't freeze —
+        but at that price warming a whole set is not worth rationing.
+
+        **Non-resident voices are skipped.** Sample libraries share the single
+        scratch slot, so warming two of them would evict each in turn: seconds
+        of SD reads to end up holding only the last. They pay their load cost on
+        switch, as they always have.
+
+        Returns how many were warmed.
+        """
+        warmed = 0
+        active_instance = getattr(self._active, "instance", None)
+        for voice in voices:
+            if not voice.resident:
+                continue
+            instance = self._slots.acquire(voice)
+            if instance is None:
+                continue
+            # Bypass what we just loaded — but never the instrument that is
+            # playing, which acquire() may well have handed straight back.
+            if instance != active_instance:
+                self._mod_host.bypass(instance, True)
+            warmed += 1
+        return warmed
+
     def load_rig(self, rig: Rig, voice: Voice) -> bool:
         """Load a saved rig: its instrument, its effects chain, and its level, as
         one operation.
@@ -231,9 +280,23 @@ class EngineManager:
         Effects first, then the instrument: `load_voice` wires the instrument to
         whatever is at the head of the chain, so the chain has to be settled
         before that leg is patched, or the instrument would be connected to an
-        effect that is about to move."""
+        effect that is about to move.
+
+        The host is brought up before any of that. `load_voice` starts it
+        lazily, and `start()` clears every instance mod-host holds — so applying
+        the chain first threw the chain away again on the first load of a
+        session, and left the instrument wired to rack ports that no longer
+        existed. The symptom was a unit that came up after every restart playing
+        the right voice with no effects and no output at all, until you tapped a
+        rig and took the already-started path."""
+        if not self._started:
+            self.start()
         self._effects.apply(plan(self._effects.snapshot(), rig.effects))
-        ok = self.load_voice(voice)
+        # The rig's patch over the catalog's: the catalog entry says what the
+        # instrument is, the rig says how this sound sets it up.
+        ok = self.load_voice(
+            replace(voice, params={**voice.params, **rig.voice_params})
+        )
         # After load_voice, which is what makes an instrument active for the
         # filter to be patched in front of.
         self.set_fixed_velocity(rig.fixed_velocity)
@@ -567,3 +630,44 @@ class EngineManager:
 
     def set_effect_param(self, instance: int, symbol: str, value: str) -> bool:
         return self._effects.set_param(instance, symbol, value)
+
+    # ------------------------------------------------------------------
+    # The instrument's own controls
+    # ------------------------------------------------------------------
+
+    def voice_controls(self, voice: Voice) -> list[ControlPort]:
+        """The knobs an instrument exposes — same mechanism as an effect's,
+        because an LV2 instrument is a plugin like any other. Empty for
+        setBfree's b_synth, which genuinely has none: drawbars, percussion and
+        Leslie are all MIDI CC.
+
+        Takes a voice rather than a URI because a voice needn't carry one: the
+        legacy engine names (sfizz) resolve to a plugin through lv2.spec_for.
+        """
+        spec = spec_for(voice.engine, voice.uri, voice.file_property)
+        return control_ports(spec.uri) if spec else []
+
+    def voice_params(self) -> dict[str, float]:
+        """What the live instrument is set to, catalog values plus whatever the
+        rig put on top."""
+        if self._active is None:
+            return {}
+        return dict(self._active.voice.params)
+
+    def set_voice_param(self, symbol: str, value: str) -> bool:
+        """Write one control to the instrument that's playing.
+
+        Live, like an effect's: the whole reason these are on a touchscreen is
+        to hear the filter close while your finger is on it. Persisting the
+        value into the rig is the UI's job, as it is for effects.
+        """
+        instance = getattr(self._active, "instance", None)
+        if instance is None:
+            return False
+        if not self._mod_host.set_param(instance, symbol, value):
+            return False
+        # The instrument is shared between every rig built on it, so the slot
+        # has to be told what changed underneath it.
+        self._slots.note_param(instance, symbol, float(value))
+        self._active.voice.params[symbol] = float(value)
+        return True

@@ -9,6 +9,7 @@ Connection is persistent (unlike FluidSynth which is per-command).
 
 import logging
 import re
+import threading
 from socket import AF_INET, SOCK_STREAM, socket
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,8 @@ class ModHostClient:
         self.host = host
         self.port = port
         self._sock: socket | None = None
+        # One socket, one command in flight. See _send.
+        self._lock = threading.Lock()
 
     def _connect(self) -> bool:
         self._close()
@@ -44,7 +47,20 @@ class ModHostClient:
             self._sock = None
 
     def _send(self, cmd: str) -> str | None:
-        """Send a command and return the response string, reconnecting if needed."""
+        """Send a command and return the response string, reconnecting if needed.
+
+        Serialised: this is one socket shared by every caller — instruments,
+        effects, the master chain — and the protocol is strictly
+        command-then-reply with no request ids to match them up. Two threads
+        writing at once interleave, and each then reads whichever reply arrives
+        first, so a load reports the result of somebody else's bypass. That is
+        not hypothetical: warming a set while a rig was loading produced exactly
+        that, with params set on instances that didn't exist yet.
+        """
+        with self._lock:
+            return self._send_locked(cmd)
+
+    def _send_locked(self, cmd: str) -> str | None:
         if not self._sock and not self._connect():
             return None
         try:
@@ -129,11 +145,12 @@ class ModHostClient:
         and re-instantiating (which is the slow part — an LV2 world scan and,
         for samplers, re-reading the library).
 
-        Note we don't rely on bypass alone for silence. Whether mod-host's
-        bypass skips the plugin's run() or merely passes audio through is a
-        property of mod-host, not something we can assume; EngineManager also
-        disconnects an inactive instrument's MIDI, so a bypassed voice gets no
-        notes either way."""
+        Note we don't rely on bypass alone for silence, and bypass is not a
+        skip: mod-host zeroes the buffers and calls the plugin's run() anyway,
+        deliberately, so a bypassed delay's tail doesn't freeze. A bypassed
+        instrument therefore still costs its DSP (~0.2% of a core, measured);
+        what makes it silent is the zeroed output, and EngineManager also
+        disconnects its MIDI so it gets no notes either way."""
         return self._ok(f"bypass {instance} {1 if bypassed else 0}")
 
     def preset_load(self, instance: int, preset_uri: str) -> bool:

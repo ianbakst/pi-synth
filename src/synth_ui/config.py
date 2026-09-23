@@ -14,9 +14,14 @@ INSTRUMENTS_DIR = os.path.expanduser("~/instruments")
 VOICES_MANIFEST = os.path.join(INSTRUMENTS_DIR, "voices.json")
 EFFECTS_MANIFEST = os.path.join(INSTRUMENTS_DIR, "effects.json")
 STATE_FILE = os.path.expanduser("~/.synth-state")
-# Saved rigs (instrument + effects chain + level). Unlike voices.json — a
-# read-only catalog shipped in the image — this is the user's own work, created
-# on the device, so it lives in $HOME and is written atomically.
+# Saved sets, each holding its own rigs (instrument + effects chain + level).
+# Unlike voices.json — a read-only catalog shipped in the image — this is the
+# user's own work, created on the device, so it lives in $HOME and is written
+# atomically.
+SETS_FILE = os.path.expanduser("~/.synth-sets.json")
+# The pre-sets rig store. Read once, to migrate its rigs into a set; never
+# written again. Left in place afterwards, which makes it that migration's
+# backup. See clients/set.py.
 RIGS_FILE = os.path.expanduser("~/.synth-rigs.json")
 # Per-voice level trims measured by tools/calibrate_levels on THIS board. In
 # $HOME for the same reason as the rigs: deploy.sh overwrites the shipped

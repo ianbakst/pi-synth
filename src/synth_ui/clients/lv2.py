@@ -24,7 +24,7 @@ import logging
 import re
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,10 @@ class ControlPort:
     default: float
     toggled: bool = False
     integer: bool = False
+    # value -> label, for ports that enumerate their settings (a filter's mode,
+    # an oscillator's wavetable). Without them the control reads "Osc1 Wave 5",
+    # which is not something anyone can choose a sound by.
+    scale_points: dict[float, str] = field(default_factory=dict)
     # Ports a performer has no use for: mostly Calf's level meters and graph
     # outputs, which are inputs in name only.
     hidden: bool = False
@@ -174,6 +178,16 @@ _PORT_NAME_RE = re.compile(r"Name:\s*(.+)")
 _PORT_MIN_RE = re.compile(r"Minimum:\s*(-?[\d.eE+]+)")
 _PORT_MAX_RE = re.compile(r"Maximum:\s*(-?[\d.eE+]+)")
 _PORT_DEF_RE = re.compile(r"Default:\s*(-?[\d.eE+]+)")
+_SCALE_POINT_RE = re.compile(r'^\s*(-?[\d.eE+]+) = "(.*)"\s*$', re.M)
+
+# One record per port, split on lv2info's own "Port N:" heading rather than on
+# blank lines. A port that lists Scale Points has a blank line *inside* it,
+# between the points and its Symbol — so splitting on blank lines tore those
+# records in half and dropped every one of them: the half carrying the symbol
+# had no "ControlPort" line left in it to match on. That silently hid every
+# enumerated control on the board — a wavetable selector, a filter's mode, a
+# delay's timing — from the params screen.
+_PORT_SPLIT_RE = re.compile(r"^[ \t]*Port \d+:[ \t]*$", re.M)
 
 # Calf exposes per-band analyser and meter ports as control inputs. They are not
 # knobs; showing them buries the three controls that matter under twenty that
@@ -181,10 +195,22 @@ _PORT_DEF_RE = re.compile(r"Default:\s*(-?[\d.eE+]+)")
 _HIDDEN_SUFFIXES = ("_vu", "meter", "_level_out", "analyzer", "_graph", "bypass")
 
 
+def port_blocks(info: str) -> list[str]:
+    """One text record per port in `lv2info` output, in the plugin's order.
+
+    Shared with `tools/verify_voices`, which needs the same records under a
+    different filter — it lists every control port to codify, while the UI wants
+    only the ones it can draw a slider for. Splitting them was the part both got
+    wrong, so it lives here once.
+    """
+    # [1:] drops the plugin's own header, which precedes the first port.
+    return _PORT_SPLIT_RE.split(info)[1:]
+
+
 def parse_control_ports(info: str) -> list[ControlPort]:
     """Input control ports from `lv2info` output, in the plugin's own order."""
     ports: list[ControlPort] = []
-    for block in info.split("\n\n"):
+    for block in port_blocks(info):
         if "ControlPort" not in block or "InputPort" not in block:
             continue
         symbol = _PORT_BLOCK_RE.search(block)
@@ -211,9 +237,46 @@ def parse_control_ports(info: str) -> list[ControlPort]:
                 toggled="#toggled" in block.lower(),
                 integer="#integer" in block.lower(),
                 hidden=any(h in symbol.group(1).lower() for h in _HIDDEN_SUFFIXES),
+                scale_points={
+                    float(value): label
+                    for value, label in _SCALE_POINT_RE.findall(block)
+                },
             )
         )
     return ports
+
+
+class PortDefaults:
+    """Each plugin's control defaults, read once and kept.
+
+    Reading them means running `lv2info`, a subprocess — and the callers need
+    them on the rig-switch path, where a plugin scan per switch would be felt.
+    A plugin's ports don't change under us, so one read per URI is enough.
+
+    Shared by the effects rack and the instrument slots: both have to be able to
+    say "and everything else goes back to what the plugin says", and neither
+    should own a private cache of it.
+    """
+
+    def __init__(self, read: Callable[[str], list[ControlPort]] | None = None):
+        self._read = read or control_ports
+        self._cache: dict[str, dict[str, float]] = {}
+
+    def for_uri(self, uri: str) -> dict[str, float]:
+        """symbol -> default. Empty if the plugin can't be read, which leaves
+        callers filling in nothing rather than writing invented values."""
+        if uri not in self._cache:
+            self._cache[uri] = {p.symbol: p.default for p in self._read(uri)}
+        return self._cache[uri]
+
+    def complete(self, uri: str, params: dict[str, float]) -> dict[str, float]:
+        """`params` with every unmentioned control at the plugin's default.
+
+        A complete set is what makes a saved chain self-describing, and what
+        stops one rig's settings hanging over into the next: writing all of it
+        leaves nothing behind to leak.
+        """
+        return {**self.for_uri(uri), **params}
 
 
 def control_ports(uri: str, runner: Runner | None = None) -> list[ControlPort]:

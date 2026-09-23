@@ -479,6 +479,32 @@ def test_switching_rigs_reuses_a_shared_effect():
     m._mod_host.load_plugin.assert_called_once_with("urn:delay", 11)
 
 
+def test_a_rig_patch_layers_over_the_catalog_voice():
+    m = make_mgr(master=FakeMaster(ready=True))
+    voice = Voice("Calf Wavetable", "sfizz", "", "Synth",
+                  uri="urn:wavetable", params={"o1level": 0.1, "adsr_a": 1.0})
+    m.load_rig(
+        Rig(name="Vox Pad", voice="Calf Wavetable",
+            voice_params={"adsr_a": 90.0, "o1wave": 5.0}),
+        voice,
+    )
+    assert m.voice_params() == {"o1level": 0.1, "adsr_a": 90.0, "o1wave": 5.0}
+
+
+def test_loading_a_voice_never_writes_back_to_the_catalog():
+    # The catalog is shared and shipped in the image. A rig merging its patch
+    # in, or a control edited while playing, must not reach back into it and
+    # redefine the instrument for every other rig until reboot.
+    m = make_mgr(master=FakeMaster(ready=True))
+    voice = Voice("Calf Wavetable", "sfizz", "", "Synth",
+                  uri="urn:wavetable", params={"adsr_a": 1.0})
+    m.load_rig(
+        Rig(name="Vox Pad", voice="Calf Wavetable", voice_params={"adsr_a": 90.0}),
+        voice,
+    )
+    assert voice.params == {"adsr_a": 1.0}
+
+
 def test_selecting_a_catalog_voice_drops_the_rig_trim():
     master = FakeMaster(ready=True)
     m = make_mgr(master=master)
@@ -720,3 +746,81 @@ def test_a_rig_asking_for_velocity_this_board_cannot_do_still_loads():
     rig = Rig(name="Pad", voice="GM", fixed_velocity=True)
     assert m.load_rig(rig, GM) is True
     assert (KBD, "fluidsynth:midi") in jack.connects
+
+
+# --- warming a set's instruments -------------------------------------------
+
+def test_warming_loads_each_voice_bypassed():
+    # Loaded so a later switch is a bypass flip, bypassed so it makes no sound
+    # in the meantime.
+    m = make_mgr(master=FakeMaster(ready=True))
+    warmed = m.warm([
+        Voice("A", "sfizz", "", "Synth", uri="urn:a", resident=True),
+        Voice("B", "sfizz", "", "Synth", uri="urn:b", resident=True),
+    ])
+    assert warmed == 2
+    loaded = {c.args[0] for c in m._mod_host.load_plugin.call_args_list}
+    assert {"urn:a", "urn:b"} <= loaded
+    assert {c.args for c in m._mod_host.bypass.call_args_list} >= {(0, True), (1, True)}
+
+
+def test_warming_skips_sample_libraries():
+    """Non-resident voices share the one scratch slot, so warming two would
+    evict each in turn — seconds of SD reads to end up holding only the last."""
+    m = make_mgr(master=FakeMaster(ready=True))
+    assert m.warm([
+        Voice("Piano A", "sfizz", "/sfz/a.sfz", "Piano"),
+        Voice("Piano B", "sfizz", "/sfz/b.sfz", "Piano"),
+    ]) == 0
+    m._mod_host.load_plugin.assert_not_called()
+
+
+def test_warming_never_bypasses_the_instrument_that_is_playing():
+    # acquire() hands the active instrument's slot straight back; bypassing it
+    # would silence the rig under your hands.
+    from types import SimpleNamespace
+
+    m = make_mgr(master=FakeMaster(ready=True))
+    voice = Voice("Live", "sfizz", "", "Synth", uri="urn:live", resident=True)
+    m.warm([voice])
+    live = m._slots.instance_of("Live")
+    m._active = SimpleNamespace(instance=live, voice=voice)
+    m._mod_host.reset_mock()
+
+    m.warm([voice])          # the set is re-warmed; this one is already playing
+
+    assert (live, True) not in {c.args for c in m._mod_host.bypass.call_args_list}
+
+
+def test_warming_a_voice_that_cannot_load_is_not_counted():
+    m = make_mgr(master=FakeMaster(ready=True))
+    m._mod_host.load_plugin.return_value = False
+    assert m.warm([
+        Voice("A", "sfizz", "", "Synth", uri="urn:a", resident=True)
+    ]) == 0
+
+
+def test_the_first_rig_of_a_session_keeps_its_effects():
+    """load_voice starts the host lazily, and starting it clears every instance.
+    Applying the chain first therefore threw away the effects just loaded and
+    left the instrument wired to rack ports that no longer existed — so after
+    every UI restart the first rig played dry and silent."""
+    jack = FakeJack(ports=EFFECT_10_AND_11_PORTS)
+    m = make_mgr(jack, master=FakeMaster(ready=True))
+    m._ctx.systemctl = lambda argv: 0          # no sudo from a test
+    assert m._started is False
+
+    m.load_rig(Rig(name="A", voice="Piano", effects=[RigEffect("urn:reverb")]), SFIZZ)
+
+    # Ordering is the whole point, and only mod-host sees it: the host has to be
+    # cleared before the chain is loaded, never after.
+    calls = m._mod_host.method_calls
+    cleared = next(
+        i for i, c in enumerate(calls)
+        if c[0] == "remove_plugin" and c.args and c.args[0] == 10
+    )
+    added = next(
+        i for i, c in enumerate(calls)
+        if c[0] == "load_plugin" and c.args and c.args[0] == "urn:reverb"
+    )
+    assert cleared < added, "the chain was loaded before start() wiped it"

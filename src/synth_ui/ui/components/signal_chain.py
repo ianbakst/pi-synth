@@ -6,9 +6,12 @@ wire it reads the way you'd sketch it on paper.
 
 **The instrument is the first block.** Not a caption on the header — a block on
 the wire, because that is what it is: the stage everything downstream is fed by.
-It differs from the effects in three ways, all structural rather than cosmetic:
+Tapping it opens its parameters, exactly like tapping an effect: an LV2
+instrument is a plugin with control ports like any other, and one rule for every
+block on the wire beats a block that behaves differently because of what it is.
+Swapping the instrument moved onto that screen's header. It still differs from
+the effects in two ways, both structural rather than cosmetic:
 
-  - tapping it swaps the instrument, not its parameters;
   - it cannot be removed, and nothing can be inserted before it;
   - it cannot be dragged, and no effect can be dropped in front of it.
 
@@ -23,7 +26,7 @@ next are always in the **same column**, so every connector is a plain horizontal
 or vertical segment and there are no elbows to draw or hit-test.
 
 Interactions:
-  - tap the instrument   -> choose a different instrument
+  - tap the instrument   -> edit its parameters (and, from there, swap it)
   - tap an effect        -> edit its parameters
   - tap its corner dot   -> bypass (stays in the chain, passes audio through)
   - tap a `+`            -> add an effect at that point in the chain
@@ -80,7 +83,7 @@ class SignalChain(Component):
         on_bypass: Callable[[int, bool], None],
         on_add: Callable[[int], None],
         on_reorder: Callable[[int, int], None],
-        on_change_instrument: Callable[[], None] | None = None,
+        on_edit_instrument: Callable[[], None] | None = None,
         source_name: str = "",
     ):
         super().__init__(rect)
@@ -93,7 +96,7 @@ class SignalChain(Component):
         self.on_bypass = on_bypass
         self.on_add = on_add
         self.on_reorder = on_reorder
-        self.on_change_instrument = on_change_instrument
+        self.on_edit_instrument = on_edit_instrument
         self.source_name = source_name
 
         self.scroll_offset = 0
@@ -361,8 +364,8 @@ class SignalChain(Component):
                 return True
 
             if slot == INSTRUMENT_SLOT:
-                if self.on_change_instrument:
-                    self.on_change_instrument()
+                if self.on_edit_instrument:
+                    self.on_edit_instrument()
                 return True
 
             if slot is not None:

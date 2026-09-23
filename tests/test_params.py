@@ -1,7 +1,7 @@
 """Tests for effect parameter discovery and the value formatting around it."""
 
 from synth_ui.clients.lv2 import ControlPort, parse_control_ports
-from synth_ui.ui.screens.effect_params import format_value
+from synth_ui.ui.screens.params import format_value
 
 # Trimmed from real `lv2info` output: two usable controls, one meter that isn't.
 # Indented with spaces here; lv2info itself uses tabs, which the parser doesn't
@@ -46,6 +46,22 @@ LV2INFO = """
                     http://lv2plug.in/ns/lv2core#ControlPort
         Symbol:     no_range
         Name:       Undeclared range
+
+    Port 5:
+        Type:       http://lv2plug.in/ns/lv2core#InputPort
+                    http://lv2plug.in/ns/lv2core#ControlPort
+        Scale Points:
+            0 = "Shiny1"
+            5 = "Blah"
+            23 = "Reed"
+
+        Symbol:     o1wave
+        Name:       Osc1 Wave
+        Minimum:    0.000000
+        Maximum:    28.000000
+        Default:    28.000000
+        Properties: http://lv2plug.in/ns/lv2core#integer
+                    http://lv2plug.in/ns/lv2core#enumeration
 """
 
 
@@ -70,6 +86,23 @@ class TestParseControlPorts:
     def test_toggles_are_marked(self):
         port = next(p for p in parse_control_ports(LV2INFO) if p.symbol == "bypass")
         assert port.toggled
+
+    def test_an_enumerated_port_survives_the_blank_line_inside_it(self):
+        """lv2info puts a blank line between a port's Scale Points and its
+        Symbol. Splitting records on blank lines tore those ports in half and
+        dropped every one — which hid every wavetable, filter mode and delay
+        timing on the board behind a screen that claimed the plugin had none."""
+        port = next(p for p in parse_control_ports(LV2INFO) if p.symbol == "o1wave")
+        assert (port.minimum, port.maximum) == (0.0, 28.0)
+        assert port.integer
+
+    def test_enumerated_settings_keep_their_names(self):
+        port = next(p for p in parse_control_ports(LV2INFO) if p.symbol == "o1wave")
+        assert port.scale_points == {0.0: "Shiny1", 5.0: "Blah", 23.0: "Reed"}
+
+    def test_a_plain_port_has_no_scale_points(self):
+        port = next(p for p in parse_control_ports(LV2INFO) if p.symbol == "level_in")
+        assert port.scale_points == {}
 
     def test_meters_and_bypass_are_hidden(self):
         """Calf exposes meters as control inputs. They aren't knobs, and showing
@@ -103,6 +136,19 @@ class TestFormatValue:
     def test_wide_range_gets_one_decimal(self):
         port = ControlPort("x", "X", 0.0, 64.0, 1.0)
         assert format_value(port)(12.34) == "12.3"
+
+    def test_an_enumeration_reads_out_its_setting(self):
+        # "Blah" is choosable by ear; 5 is not.
+        port = ControlPort("o1wave", "Osc1 Wave", 0.0, 28.0, 0.0, integer=True,
+                           scale_points={0.0: "Shiny1", 5.0: "Blah"})
+        assert format_value(port)(5.0) == "Blah"
+        assert format_value(port)(5.4) == "Blah"      # mid-drag, between detents
+
+    def test_an_enumeration_falls_back_to_the_number(self):
+        """A plugin needn't label every value in its range."""
+        port = ControlPort("mode", "Mode", 0.0, 9.0, 0.0, integer=True,
+                           scale_points={0.0: "Off"})
+        assert format_value(port)(7.0) == "7"
 
 
 class TestWhitespace:

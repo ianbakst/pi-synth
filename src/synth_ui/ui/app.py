@@ -1,5 +1,6 @@
 import os
 import threading
+from dataclasses import replace
 
 import pygame
 
@@ -12,7 +13,8 @@ from synth_ui.clients.effects_catalog import (
     read_effects_manifest,
 )
 from synth_ui.clients.midi_control import MidiControlListener
-from synth_ui.clients.rig import Rig, RigEffect, RigLibrary
+from synth_ui.clients.rig import Rig, RigEffect
+from synth_ui.clients.set import SetLibrary, SongSet
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
@@ -29,6 +31,7 @@ from synth_ui.config import (
     RIGS_FILE,
     SCREEN_H,
     SCREEN_W,
+    SETS_FILE,
     SOUNDFONT_DIR,
     STATE_FILE,
     TRIMS_FILE,
@@ -37,9 +40,10 @@ from synth_ui.config import (
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.audio import AudioScreen
 from synth_ui.ui.screens.base import Screen
-from synth_ui.ui.screens.effect_params import EffectParamsScreen
 from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
+from synth_ui.ui.screens.params import ParamsScreen
 from synth_ui.ui.screens.rigs import RigsScreen
+from synth_ui.ui.screens.sets import SetsScreen
 from synth_ui.ui.screens.splash import SplashScreen
 from synth_ui.ui.screens.text_entry import TextEntryScreen
 from synth_ui.ui.screens.usb import USBScreen
@@ -49,18 +53,29 @@ from synth_ui.ui.utils import load_voices, lv2_world
 SPLASH_DURATION_MS = 5000
 
 
-def _load_state() -> str | None:
+def _load_state() -> tuple[str, str]:
+    """(set id, rig id) from last time — where you were, not what it was called.
+
+    Two lines now that a rig lives inside a set. A one-line file is the format
+    written before sets existed, where the single value was the active rig's
+    *name*; it is returned as the rig field and resolved by name as a fallback,
+    so an upgrade lands you back on the rig you left rather than at the top of
+    the list.
+    """
     try:
         with open(STATE_FILE) as f:
-            return f.read().strip() or None
-    except FileNotFoundError:
-        return None
+            lines = [line.strip() for line in f.read().splitlines()]
+    except OSError:
+        return "", ""
+    if len(lines) >= 2:
+        return lines[0], lines[1]
+    return "", (lines[0] if lines else "")
 
 
-def _save_state(name: str) -> None:
+def _save_state(set_id: str, rig_id: str) -> None:
     try:
         with open(STATE_FILE, "w") as f:
-            f.write(name)
+            f.write(f"{set_id}\n{rig_id}\n")
     except Exception:
         pass
 
@@ -125,7 +140,7 @@ class SynthUI:
         self._audio_screen: AudioScreen | None = None
         self._effects_screen: EffectsScreen | None = None
         self._catalog_screen: EffectsCatalogScreen | None = None
-        self._params_screen: EffectParamsScreen | None = None
+        self._params_screen: ParamsScreen | None = None
         self._insert_at: int | None = None
         # Set while the voice picker is open to swap an existing rig's
         # instrument rather than to build a new rig from the chosen voice.
@@ -137,39 +152,48 @@ class SynthUI:
         )
         self._picker: VoicePickerScreen | None = None
 
-        # Rigs are the unit of selection; the voice catalog is what you build
-        # them from. A freshly flashed card has no rigs, so bootstrap one from
-        # DEFAULT_VOICE — otherwise the instrument would boot to an empty list
-        # and make no sound.
-        self._rigs = RigLibrary.load(RIGS_FILE)
-        self._rigs.bootstrap(DEFAULT_VOICE)
+        # Sets are what you pick between songs; the rigs inside one are what you
+        # pick during a song. A freshly flashed card has neither, so bootstrap a
+        # set holding one DEFAULT_VOICE rig — otherwise the instrument boots to
+        # an empty list and makes no sound. RIGS_FILE is read only to migrate a
+        # board that predates sets.
+        self._sets = SetLibrary.load(SETS_FILE, legacy_rigs_path=RIGS_FILE)
+        self._sets.bootstrap(DEFAULT_VOICE)
+        self._active_set: SongSet | None = None
         self._library: dict[str, Voice] = {}
         self._reload_library()
 
-        self._home = RigsScreen(
-            rigs=self._rigs.rigs,
+        self._home = SetsScreen(
+            sets=self._sets.sets,
+            on_enter_set=self._enter_set,
+            on_edit_set=self._show_set_rename_screen,
+            on_new=self._on_new_set,
+            on_audio=self._show_audio_screen,
+            on_gain_change=self._on_gain_change,
+            on_reorder=self._on_reorder_sets,
+            initial_gain=self._gain,
+        )
+        self._rig_screen = RigsScreen(
+            rigs=[],
             on_load_rig=self._load_rig,
-            on_remove_rig=self._on_remove_rig,
             on_edit_rig=self._show_rename_screen,
             on_new=lambda: self._show_voice_picker(replaces_instrument=False),
             on_edit=self._show_effects_screen,
-            on_audio=self._show_audio_screen,
+            on_back=self._show_home,
             on_gain_change=self._on_gain_change,
-            on_save=_save_state,
             on_reorder=self._on_reorder_rigs,
             effect_names={e.uri: e.name for e in self._catalog},
             unavailable=self._rig_unavailable,
-            # Falls back to the first usable rig if this one is gone.
-            initial_name=_load_state(),
             initial_gain=self._gain,
         )
+        self._restore_state()
         # Hands-free rig switching. Runs whether or not a pedal is attached —
         # aseqdump subscribes to whatever appears, so plugging one in later
         # works with no restart. Failure is non-fatal: the touchscreen is the
         # primary control and must keep working regardless.
         self._midi_control = MidiControlListener(
-            on_next=self._home.select_next,
-            on_previous=self._home.select_previous,
+            on_next=self._rig_screen.select_next,
+            on_previous=self._rig_screen.select_previous,
             next_cc=MIDI_NEXT_RIG_CC,
             prev_cc=MIDI_PREV_RIG_CC,
             on_program=self._select_rig_by_index if MIDI_PROGRAM_SELECTS_RIG else None,
@@ -211,6 +235,12 @@ class SynthUI:
     def _voice_for(self, name: str) -> Voice | None:
         return self._library.get(name)
 
+    @property
+    def _rigs(self) -> list[Rig]:
+        """The active set's rigs. Empty when no set is active, which is only
+        the case after the playing set was deleted."""
+        return self._active_set.rigs if self._active_set is not None else []
+
     def _rig_unavailable(self, rig: Rig) -> str:
         """Why this rig can't be loaded here — surfaced on the row rather than
         discovered by tapping it. A rig outlives the catalog: its voice can be
@@ -225,6 +255,172 @@ class SynthUI:
         if voice is None:
             return False
         return self._engine.load_rig(rig, voice)
+
+    # ------------------------------------------------------------------
+    # Sets
+    # ------------------------------------------------------------------
+
+    def _restore_state(self) -> None:
+        """Pick up where the instrument was left, in a background thread so the
+        splash is drawn while a sample library loads.
+
+        Resuming, not entering: the saved rig is loaded even if it isn't the
+        first in its set. Only if it can't be found does this fall back to the
+        set's first usable rig, so a fresh card — or one whose saved rig was
+        deleted — still boots into something playable rather than silence.
+        """
+        set_id, rig_id = _load_state()
+        song_set = self._sets.get(set_id)
+        rig = song_set.get(rig_id) if song_set else None
+        if rig is None:
+            # Either the pre-sets state file, whose single value was a rig
+            # *name*, or a rig that has since moved or gone.
+            found = self._sets.find_rig(rig_id)
+            if found is None and rig_id:
+                found = next(
+                    (
+                        (s, r)
+                        for s in self._sets.sets
+                        for r in s.rigs
+                        if r.name == rig_id
+                    ),
+                    None,
+                )
+            if found is not None:
+                song_set, rig = found
+        if song_set is None:
+            song_set = self._sets.sets[0] if self._sets.sets else None
+        if song_set is None:
+            return
+
+        self._activate_set(song_set)
+        target = rig if rig is not None and not self._rig_unavailable(rig) else None
+
+        def resume() -> None:
+            if target is not None:
+                self._rig_screen.select(target)
+            else:
+                self._rig_screen.load_first()
+            # Warmed here as well as on entry, or the set you boot into would be
+            # the one set that isn't ready — you'd have to leave it and come
+            # back to get instant switching in the first song of the night.
+            self._warm_set(song_set)
+
+        self._in_background(resume)
+
+    def _in_background(self, target) -> None:
+        """Run something off the UI thread.
+
+        Loading a rig can take seconds when its voice is a sample library, and
+        the frame loop must keep drawing through it. A named seam rather than an
+        inline Thread so tests can run these steps in order instead of racing
+        them.
+        """
+        threading.Thread(target=target, daemon=True).start()
+
+    def _activate_set(self, song_set: SongSet) -> None:
+        """Make a set the one being played: its rigs on the rigs screen, its pad
+        highlighted on the sets screen. Loads nothing by itself."""
+        self._active_set = song_set
+        self._home.set_active(song_set)
+        self._rig_screen.set_rigs(song_set.rigs, title=song_set.name)
+
+    def _enter_set(self, song_set: SongSet) -> None:
+        """Tapping a set opens it — and, if it wasn't already the active one,
+        makes it active and starts its first usable rig.
+
+        Re-entering the set you're already in changes nothing, which is what
+        makes coming back from editing a chain safe. Entering a different one is
+        a deliberate move to another song, so it loads: walking into a set
+        should leave you ready to play without a second tap.
+        """
+        already_active = (
+            self._active_set is not None and self._active_set.id == song_set.id
+        )
+        self._activate_set(song_set)
+        self.screen = self._rig_screen
+        if not already_active:
+            self._in_background(lambda: self._start_set(song_set))
+
+    def _start_set(self, song_set: SongSet) -> None:
+        """Make a freshly entered set playable, then ready.
+
+        The first rig loads first so there's sound as soon as possible; the rest
+        of the set is warmed behind it, which is the part that makes every
+        switch *within* the song immediate. Warming after rather than before
+        also leaves the rig you're about to play as the most recently used, so
+        a set with more rigs than there are resident slots can't evict the one
+        under your hands.
+        """
+        self._rig_screen.load_first()
+        self._warm_set(song_set)
+
+    def _warm_set(self, song_set: SongSet) -> None:
+        """Pre-load the set's instruments, each with the patch its rig will ask
+        for — so selecting a rig finds the plugin loaded *and* already set up,
+        and the reconcile on switch has nothing left to write."""
+        voices = []
+        for rig in song_set.rigs:
+            voice = self._voice_for(rig.voice)
+            if voice is None or self._rig_unavailable(rig):
+                continue
+            voices.append(
+                replace(voice, params={**voice.params, **rig.voice_params})
+            )
+        if voices:
+            self._engine.warm(voices)
+
+    def _on_new_set(self) -> None:
+        song_set = self._sets.create()
+        self._home.refresh(self._sets.sets)
+        self._show_set_rename_screen(song_set, title="Name set")
+
+    def _show_set_rename_screen(
+        self, song_set: SongSet, title: str = "Rename set"
+    ) -> None:
+        def done(name: str) -> None:
+            song_set.name = name.strip() or song_set.name
+            self._sets.save()
+            self._home.refresh(self._sets.sets)
+            if self._active_set is not None and self._active_set.id == song_set.id:
+                self._rig_screen.set_rigs(song_set.rigs, title=song_set.name)
+            self._show_home()
+
+        self.screen = TextEntryScreen(
+            title=title,
+            initial=song_set.name,
+            on_done=done,
+            on_cancel=self._show_home,
+            on_delete=lambda: self._on_remove_set(song_set),
+            delete_label="Delete set",
+        )
+
+    def _on_remove_set(self, song_set: SongSet) -> None:
+        """Deleting a set deletes the rigs inside it — they live nowhere else.
+
+        The set that is playing can be deleted like any other; what keeps
+        sounding is whatever the engine already has, since nothing here unloads
+        it. The instrument is left with no active set rather than silently
+        jumping into another song's.
+        """
+        self._sets.remove(song_set.id)
+        if self._active_set is not None and self._active_set.id == song_set.id:
+            self._active_set = None
+            self._home.set_active(None)
+            self._rig_screen.set_rigs([], title="No set")
+        self._home.refresh(self._sets.sets)
+        self._show_home()
+
+    def _on_reorder_sets(self, source: int, target: int) -> None:
+        if self._sets.move(source, target):
+            self._home.refresh(self._sets.sets)
+
+    def _save_where_we_were(self) -> None:
+        """Record the active set and rig on the way out, by id, so the next
+        boot resumes here rather than at the top of the list."""
+        rig = self._rig_screen.active_rig
+        if self._active_set is not None and rig is not None:
+            _save_state(self._active_set.id, rig.id)
 
     def _show_voice_picker(self, replaces_instrument: bool = False) -> None:
         """The voice catalogue, opened for one of two jobs.
@@ -241,7 +437,7 @@ class SynthUI:
             # Back returns where you came from: the chain you were editing, or
             # home if you were starting a new rig.
             on_back=(
-                self._show_effects_screen if replaces_instrument else self._show_home
+                self._show_effects_screen if replaces_instrument else self._show_rigs
             ),
             on_usb=self._show_usb_screen,
         )
@@ -257,13 +453,17 @@ class SynthUI:
             self._picking_replaces_instrument = False
             self._swap_instrument(voice)
             return
-        rig = self._rigs.create_from_voice(voice.name)
-        self._home.refresh(self._rigs.rigs)
+        if self._active_set is None:
+            return
+        rig = self._active_set.create_from_voice(voice.name)
+        self._sets.save()
+        self._rig_screen.set_rigs(self._active_set.rigs)
+        self._home.refresh(self._sets.sets)
         ok = self._engine.load_rig(rig, voice)
-        self._home._active_rig = rig
-        self._home.grid.tiles = self._home._tiles()
-        self._home.header.name = rig.name
-        self._home.header.error = not ok
+        self._rig_screen._active_rig = rig
+        self._rig_screen.grid.tiles = self._rig_screen._tiles()
+        self._rig_screen.header.name = rig.name
+        self._rig_screen.header.error = not ok
 
         # Name it while you have the context for what it is. The rig is already
         # created and loaded, so the instrument is playable during naming and
@@ -272,38 +472,59 @@ class SynthUI:
 
     def _show_rename_screen(self, rig: Rig, title: str = "Rename rig") -> None:
         def done(name: str) -> None:
-            self._rigs.rename(rig, name)
-            self._home.header.name = rig.name
-            self._home.refresh(self._rigs.rigs)
-            self._show_home()
+            # A plain assignment: the name is metadata now, so two rigs may
+            # share one and renaming can't turn this into a different rig.
+            rig.name = name.strip() or rig.name
+            self._sets.save()
+            self._rig_screen.header.name = rig.name
+            self._rig_screen.set_rigs(self._rigs)
+            self._show_rigs()
 
         self.screen = TextEntryScreen(
             title=title,
             initial=rig.name,
             on_done=done,
-            on_cancel=self._show_home,
+            on_cancel=self._show_rigs,
+            on_delete=lambda: self._on_remove_rig(rig),
+            delete_label="Delete rig",
         )
 
     def _on_remove_rig(self, rig: Rig) -> None:
-        self._rigs.remove(rig.name)
-        self._home.refresh(self._rigs.rigs)
+        """A rig lives in exactly one set, so removing it from that set is
+        deleting it. What's playing keeps playing — nothing unloads the engine —
+        but the screen stops claiming to be on a rig that no longer exists."""
+        if self._active_set is None:
+            return
+        self._active_set.remove(rig.id)
+        self._sets.save()
+        self._rig_screen.rig_removed(rig.id)
+        self._rig_screen.set_rigs(self._active_set.rigs)
+        self._home.refresh(self._sets.sets)
+        self._show_rigs()
 
     def _select_rig_by_index(self, index: int) -> None:
-        """Program Change selects a rig by position. Out-of-range is ignored
-        rather than clamped: a Program Change past the end of the set list is
-        someone else's message, not a request for the last rig."""
-        if 0 <= index < len(self._rigs.rigs):
-            self._home._select_rig(self._rigs.rigs[index])
+        """Program Change selects a rig by position *within the active set*,
+        which is what makes it usable: a song's four rigs are PC 0-3.
+
+        Out-of-range is ignored rather than clamped: a Program Change past the
+        end of the set is someone else's message, not a request for the last
+        rig.
+        """
+        rigs = self._rigs
+        if 0 <= index < len(rigs):
+            self._rig_screen.select(rigs[index])
 
     def _on_reorder_rigs(self, source: int, target: int) -> None:
-        if self._rigs.move(source, target):
-            self._home.refresh(self._rigs.rigs)
+        if self._active_set is not None and self._active_set.move(source, target):
+            self._sets.save()
+            self._rig_screen.set_rigs(self._active_set.rigs)
 
-    def _sync_active_rig_effects(self) -> None:
-        """Persist the current effects chain into the active rig. Called when
-        leaving the effects screen — editing effects *is* editing the rig now,
-        so there's no separate save step to forget."""
-        rig = self._home.active_rig
+    def _sync_active_rig(self) -> None:
+        """Persist what's been dialled in — chain, instrument patch, level —
+        into the active rig. Called when leaving the effects screen: editing a
+        rig's blocks *is* editing the rig, so there's no separate save step to
+        forget."""
+        rig = self._rig_screen.active_rig
         if rig is None:
             return
         if self._effects_screen is not None:
@@ -315,15 +536,35 @@ class SynthUI:
             RigEffect(uri=e.uri, params=dict(e.params), bypassed=e.bypassed)
             for e in self._engine.effects()
         ]
-        self._rigs.replace(rig)
-        self._home.refresh(self._rigs.rigs)
+        # The instrument's controls, for the same reason — but only where they
+        # differ from the catalog entry. A rig stores what *this sound* does to
+        # the instrument, not a copy of the instrument, so a corrected value in
+        # a shipped voice still reaches every rig built on it.
+        catalog = self._library.get(rig.voice)
+        if catalog is not None:
+            rig.voice_params = {
+                symbol: value
+                for symbol, value in self._engine.voice_params().items()
+                if catalog.params.get(symbol) != value
+            }
+        if self._active_set is not None:
+            self._active_set.replace(rig)
+            self._sets.save()
+        self._rig_screen.set_rigs(self._rigs)
 
     def _on_gain_change(self, gain: float) -> None:
         self._gain = gain
         self._engine.set_gain(gain)
 
     def _show_home(self) -> None:
+        """Home is the sets screen. Leaving a set never changes what is
+        playing — browsing is not switching."""
         self.screen = self._home
+
+    def _show_rigs(self) -> None:
+        """Back to the active set's rigs — where you were before naming or
+        editing something."""
+        self.screen = self._rig_screen
 
     def _show_usb_screen(self) -> None:
         self.screen = USBScreen(
@@ -386,7 +627,7 @@ class SynthUI:
             self._audio_screen.header.name = "Audio switch failed"
 
     def _show_effects_screen(self) -> None:
-        rig = self._home.active_rig
+        rig = self._rig_screen.active_rig
         self._effects_screen = EffectsScreen(
             effects=self._engine.effects(),
             catalog=self._catalog,
@@ -397,7 +638,7 @@ class SynthUI:
             on_back=self._leave_effects_screen,
             on_trim_change=self._engine.set_rig_trim,
             on_reorder=self._on_reorder_effects,
-            on_change_instrument=self._show_instrument_swap,
+            on_edit_instrument=self._show_voice_params_screen,
             # None hides the control on a board that can't do it, rather than
             # offering a button that silently fails.
             on_fixed_velocity=(
@@ -413,7 +654,7 @@ class SynthUI:
         self.screen = self._effects_screen
 
     def _leave_effects_screen(self) -> None:
-        self._sync_active_rig_effects()
+        self._sync_active_rig()
         self._show_home()
 
     def _show_effects_catalog_screen(self, index: int | None = None) -> None:
@@ -441,13 +682,19 @@ class SynthUI:
         The chain is the point of a rig, so it survives: the same reverb and
         delay, now fed by a different instrument. Only the first block changes.
         """
-        rig = self._home.active_rig
+        rig = self._rig_screen.active_rig
         if rig is None:
             return
         rig.voice = voice.name
-        self._rigs.replace(rig)
+        # The patch described a different instrument's controls. Carrying it
+        # over would push this rig's old cutoff onto whatever symbol happens to
+        # share that name on the new plugin, or silently do nothing.
+        rig.voice_params = {}
+        if self._active_set is not None:
+            self._active_set.replace(rig)
+            self._sets.save()
         self._engine.load_voice(voice)
-        self._home.refresh(self._rigs.rigs)
+        self._rig_screen.set_rigs(self._rigs)
         self._show_effects_screen()
 
     def _on_reorder_effects(self, source: int, target: int) -> None:
@@ -473,7 +720,7 @@ class SynthUI:
         )
         # lv2info is a subprocess; reading it on the UI thread would stall the
         # frame loop for the length of a plugin scan.
-        self._params_screen = EffectParamsScreen(
+        self._params_screen = ParamsScreen(
             name=name,
             ports=self._engine.effect_controls(effect.uri),
             values=dict(effect.params),
@@ -495,6 +742,48 @@ class SynthUI:
         ):
             self._engine.set_effect_param(instance, port.symbol, str(port.default))
         self._show_effect_params_screen(instance)
+
+    def _show_voice_params_screen(self) -> None:
+        """The instrument's own controls, on the same screen its effects get.
+
+        Reached by tapping the first block on the wire. Swapping the instrument
+        lives in this screen's header now: one rule — tap a block, edit a block
+        — beats the first block behaving differently from the rest because of
+        what it is.
+        """
+        rig = self._rig_screen.active_rig
+        voice = self._library.get(rig.voice) if rig is not None else None
+        if voice is None:
+            return
+        self._params_screen = ParamsScreen(
+            name=voice.name,
+            ports=self._engine.voice_controls(voice),
+            values=self._engine.voice_params(),
+            on_change=(
+                lambda symbol, value: self._engine.set_voice_param(symbol, str(value))
+            ),
+            on_back=self._show_effects_screen,
+            on_reset=self._reset_voice_params,
+            on_swap=self._show_instrument_swap,
+        )
+        self.screen = self._params_screen
+
+    def _reset_voice_params(self) -> None:
+        """Back to the instrument as the catalog describes it.
+
+        Not the plugin's raw defaults, which is what Reset means for an effect.
+        A voice is a catalog entry — "Rhodes EP" is mda EPiano *plus* the values
+        that make it that voice — so resetting past them would hand back a
+        different instrument than the one named at the top of the screen.
+        """
+        rig = self._rig_screen.active_rig
+        voice = self._library.get(rig.voice) if rig is not None else None
+        if voice is None:
+            return
+        for port in self._engine.voice_controls(voice):
+            baseline = voice.params.get(port.symbol, port.default)
+            self._engine.set_voice_param(port.symbol, str(baseline))
+        self._show_voice_params_screen()
 
     def _on_remove_effect(self, instance: int) -> None:
         if self._effects_screen is None:
@@ -568,5 +857,5 @@ class SynthUI:
                 pygame.display.flip()
                 clock.tick(30)
         finally:
-            self._home.save()
+            self._save_where_we_were()
             pygame.quit()

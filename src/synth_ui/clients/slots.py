@@ -23,9 +23,9 @@ configuration.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from synth_ui.clients.lv2 import PluginSpec, spec_for
+from synth_ui.clients.lv2 import PluginSpec, PortDefaults, spec_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.voice import Voice
 
@@ -46,16 +46,30 @@ class Slot:
     # The instrument file currently set on this plugin, if it takes one. Lets a
     # re-selected voice skip re-sending an unchanged (and expensive) SFZ path.
     path: str = ""
+    # How this plugin is set up *right now*: the preset loaded into it and every
+    # control value written over the top. One plugin backs many voices, and with
+    # per-rig voice params it also backs many rigs — so a slot has to remember
+    # what is in it, or the next voice inherits the last one's settings. See
+    # _reconcile.
+    preset: str = ""
+    params: dict[str, float] = field(default_factory=dict)
 
 
 class InstrumentSlots:
     """Owns the mod-host instrument instances and what's loaded in each."""
 
-    def __init__(self, mod_host: ModHostClient):
+    def __init__(
+        self,
+        mod_host: ModHostClient,
+        defaults: PortDefaults | None = None,
+    ):
         self._mh = mod_host
         # instance -> Slot, in least-recently-used-first order.
         self._slots: dict[int, Slot] = {}
         self._lru: list[int] = []
+        # Shared with the effects rack: both need "and everything else goes
+        # back to what the plugin says", and reading that is a subprocess.
+        self._defaults = defaults or PortDefaults()
 
     # ------------------------------------------------------------------
     # Acquiring
@@ -65,8 +79,10 @@ class InstrumentSlots:
         """The instance this voice should play from, loading it if needed.
 
         Returns None if the voice names no plugin or mod-host refuses to load
-        it. A voice already resident returns its existing instance with no
-        mod-host traffic at all — that is the fast path this class exists for.
+        it. A voice already resident returns its existing instance without
+        instantiating anything — that is the fast path this class exists for.
+        It still costs a `param_set` per control that differs from what the slot
+        currently holds, which is a socket write rather than a plugin load.
         """
         spec = spec_for(voice.engine, voice.uri, voice.file_property)
         if spec is None:
@@ -75,6 +91,7 @@ class InstrumentSlots:
 
         existing = self._find(voice, spec)
         if existing is not None:
+            self._reconcile(existing, voice)
             self._touch(existing.instance)
             return existing.instance
 
@@ -92,16 +109,69 @@ class InstrumentSlots:
         return spec is not None and self._find(voice, spec) is not None
 
     def _find(self, voice: Voice, spec: PluginSpec) -> Slot | None:
-        """A slot already holding this exact voice.
+        """A slot whose plugin can play this voice, settings aside.
 
         Matched on the plugin URI *and* the instrument file: two sfizz voices
         are the same plugin but different instruments, and treating them as
-        interchangeable would leave you playing the wrong piano.
+        interchangeable would leave you playing the wrong piano. Control values
+        are not part of that identity — an SFZ is a several-second read, while a
+        control is a socket write, so differing settings are reconciled in place
+        rather than being grounds for a second instance.
         """
         for slot in self._slots.values():
             if slot.uri == spec.uri and slot.path == voice.path:
                 return slot
         return None
+
+    def _reconcile(self, slot: Slot, voice: Voice) -> None:
+        """Make a slot that's already loaded hold *this* voice's settings.
+
+        One plugin backs many voices and, now that rigs carry their own voice
+        params, many rigs. Handing the instance back without this would play the
+        previous rig's patch under the new rig's name — the plugin is loaded, so
+        nothing looks broken, it just sounds wrong.
+
+        Controls the incoming voice doesn't mention go back to the plugin's own
+        default rather than being left alone. Leaving them is the leak: a cutoff
+        dialled down in one rig would otherwise follow the instrument into every
+        other rig that never mentions cutoff.
+        """
+        if slot.preset != voice.preset:
+            if voice.preset and not self._mh.preset_load(slot.instance, voice.preset):
+                logger.error("mod-host failed to load preset %s", voice.preset)
+            slot.preset = voice.preset
+            # A preset rewrites controls we have no record of, so none of the
+            # old values can be trusted to skip a write below.
+            slot.params = {}
+
+        # Only a control that has to be *undone* needs the plugin's defaults,
+        # and reading those means running lv2info. Switching between two rigs
+        # that set the same controls — or back to the same voice — therefore
+        # never pays for it.
+        stale = [s for s in slot.params if s not in voice.params]
+        wanted: dict[str, float] = {}
+        if stale:
+            defaults = self._defaults.for_uri(slot.uri)
+            wanted = {s: defaults[s] for s in stale if s in defaults}
+        wanted.update(voice.params)
+
+        for symbol, value in wanted.items():
+            if slot.params.get(symbol) != value:
+                self._mh.set_param(slot.instance, symbol, str(value))
+
+        slot.params = dict(voice.params)
+        slot.voice_name = voice.name
+
+    def note_param(self, instance: int, symbol: str, value: float) -> None:
+        """Record a control written to a live instrument from outside — the
+        params screen editing an instrument while it plays.
+
+        Without this the slot's picture of itself goes stale, and the next
+        reconcile skips a write it should make.
+        """
+        slot = self._slots.get(instance)
+        if slot is not None:
+            slot.params[symbol] = value
 
     # ------------------------------------------------------------------
     # Allocation
@@ -164,6 +234,10 @@ class InstrumentSlots:
             logger.error("mod-host failed to load preset %s", voice.preset)
         for symbol, value in voice.params.items():
             self._mh.set_param(instance, symbol, str(value))
+        # What the slot now holds, so the next voice through it knows what it
+        # has to undo.
+        slot.preset = voice.preset
+        slot.params = dict(voice.params)
 
         if voice.path and spec.file_property:
             # The instrument file is an atom-based patch property; param_set

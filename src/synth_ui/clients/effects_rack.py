@@ -34,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from synth_ui.clients.jack_graph import JackGraph
+from synth_ui.clients.lv2 import PortDefaults
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import ChainPlan
 
@@ -63,12 +64,17 @@ class EffectsRack:
         jack: JackGraph,
         mod_host: ModHostClient,
         sink: Callable[[], list[str]] | None = None,
+        defaults: PortDefaults | None = None,
     ):
         self._jack = jack
         self._mh = mod_host
         self._sink = sink or jack.dac_sinks
         self._effects: list[Effect] = []
         self._wired: list[tuple[str, str]] = []  # connections the rack established
+        # Every effect carries a value for every control, so switching rigs
+        # writes a complete set and nothing from the outgoing rig survives. See
+        # _complete().
+        self._defaults = defaults or PortDefaults()
 
     # ------------------------------------------------------------------
     # Chain management
@@ -91,7 +97,11 @@ class EffectsRack:
         if not self._mh.load_plugin(uri, instance):
             logger.error("effects mod-host failed to load %s", uri)
             return None
-        effect = Effect(instance, uri)
+        # Seeded with the plugin's own defaults rather than left empty. The
+        # values are what the effect is actually at, so recording them costs
+        # nothing — and it means the rig this is saved into describes the whole
+        # effect, not only the knobs that happened to be touched.
+        effect = Effect(instance, uri, params=dict(self._defaults.for_uri(uri)))
         if index is None or index >= len(self._effects):
             self._effects.append(effect)
         else:
@@ -161,6 +171,14 @@ class EffectsRack:
         keep their instance and are never reloaded, so switching between two
         rigs that share a reverb doesn't re-instantiate it.
 
+        Each effect's controls are completed from the plugin's defaults before
+        being written, so a reused instance is fully overwritten. Writing only
+        the symbols the incoming rig happened to mention left the rest at the
+        outgoing rig's values: a reverb dialled to a 4-second decay in one rig
+        stayed at 4 seconds under the next rig that never mentioned decay. Rigs
+        saved before effects carried a full set get completed here too, which is
+        what stops them leaking until they're next saved.
+
         One _rechain() at the end, not one per mutation."""
         for instance in chain.remove:
             self._mh.remove_plugin(instance)
@@ -181,7 +199,8 @@ class EffectsRack:
                     ok = False
                     continue
                 used.add(instance)
-            for symbol, value in wanted.params.items():
+            params = self._defaults.complete(wanted.uri, wanted.params)
+            for symbol, value in params.items():
                 self._mh.set_param(instance, symbol, str(value))
             # Bypass is restored explicitly, and on every effect rather than
             # only the bypassed ones: an instance reused from the outgoing rig
@@ -193,7 +212,7 @@ class EffectsRack:
                     instance,
                     wanted.uri,
                     bypassed=wanted.bypassed,
-                    params=dict(wanted.params),
+                    params=params,
                 )
             )
 

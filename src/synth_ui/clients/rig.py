@@ -4,8 +4,11 @@
 
 Distinct from a *voice*, which is one entry in the shipped instrument catalog
 (`voices.json`, read-only, comes from the image). A rig is something you build
-on the device by choosing a voice and stacking effects, then save. So rigs live
-in their own writable file (`~/.synth-rigs.json`).
+on the device by choosing a voice and stacking effects.
+
+A rig belongs to exactly one **set** and is stored inside it (see set.py), so
+this module owns what a rig *is* and how a chain is diffed, not where rigs live.
+`read_rigs` remains only to read the pre-sets store during migration.
 
 Careful with the word "preset" — it already means a soundfont's bank/program in
 this codebase (see `synth_client.Preset` and the preset screen). A rig is the
@@ -29,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -45,11 +49,26 @@ class RigEffect:
     bypassed: bool = False
 
 
+def new_id() -> str:
+    return str(uuid.uuid4())
+
+
 @dataclass
 class Rig:
     name: str
     voice: str                 # Voice.name in the catalog
+    # What this rig *is*, as far as anything else is concerned. The name is
+    # metadata: two songs can both want a rig called "Rhodes", and renaming one
+    # must not turn it into a different rig or break what points at it.
+    id: str = field(default_factory=new_id)
     effects: list[RigEffect] = field(default_factory=list)
+    # Control symbol -> value for the *instrument*, on top of whatever the
+    # catalog entry sets. The catalog is read-only and shipped in the image, and
+    # one entry has to serve every rig built on it; the patch — this pad's slow
+    # attack, that lead's cutoff — is part of the sound the rig names, so it is
+    # the rig's to own and lives in the rig's file. After `effects` because
+    # callers build rigs positionally.
+    voice_params: dict[str, float] = field(default_factory=dict)
     # Offset on top of the voice's calibrated trim — the "by ear" nudge that
     # measured loudness can't give you. See tools/calibrate_levels.py.
     trim_db: float = 0.0
@@ -62,8 +81,10 @@ class Rig:
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "name": self.name,
             "voice": self.voice,
+            "voice_params": self.voice_params,
             "effects": [
                 {"uri": e.uri, "params": e.params, "bypassed": e.bypassed}
                 for e in self.effects
@@ -77,6 +98,15 @@ class Rig:
         return Rig(
             name=entry["name"],
             voice=entry["voice"],
+            # Minted when absent: every rig saved before rigs had identity, on
+            # every board in the field, gets one on load and keeps it from the
+            # next save onward.
+            id=entry.get("id") or new_id(),
+            # Absent in every rig file written before rigs carried a patch, so
+            # an older store loads with the voice at its catalog settings.
+            voice_params={
+                k: float(v) for k, v in (entry.get("voice_params") or {}).items()
+            },
             effects=[
                 RigEffect(
                     uri=e["uri"],
@@ -131,120 +161,12 @@ def plan(current: list[tuple[int, str]], target: list[RigEffect]) -> ChainPlan:
     return ChainPlan(remove=sorted(remove), add=add, order=order)
 
 
-class RigLibrary:
-    """The user's saved rigs, and the operations the UI performs on them.
-
-    Kept out of the screens so the rules — unique names, "there is always at
-    least one rig", persistence — are testable without pygame.
-    """
-
-    def __init__(self, path: str, rigs: list[Rig] | None = None):
-        self.path = path
-        self.rigs: list[Rig] = list(rigs or [])
-
-    @classmethod
-    def load(cls, path: str) -> RigLibrary:
-        return cls(path, read_rigs(path))
-
-    def save(self) -> bool:
-        return write_rigs(self.path, self.rigs)
-
-    def names(self) -> list[str]:
-        return [r.name for r in self.rigs]
-
-    def get(self, name: str) -> Rig | None:
-        return next((r for r in self.rigs if r.name == name), None)
-
-    def unique_name(self, base: str) -> str:
-        """`base`, or `base 2`, `base 3`... Rigs are named after the voice they
-        start from, and picking the same instrument twice is normal."""
-        if self.get(base) is None:
-            return base
-        n = 2
-        while self.get(f"{base} {n}") is not None:
-            n += 1
-        return f"{base} {n}"
-
-    def create_from_voice(self, voice_name: str) -> Rig:
-        """A new rig is just an instrument with nothing on it yet."""
-        rig = Rig(name=self.unique_name(voice_name), voice=voice_name)
-        self.rigs.append(rig)
-        self.save()
-        return rig
-
-    def replace(self, rig: Rig) -> None:
-        """Persist edits to an existing rig (by name), or append it if new."""
-        for i, existing in enumerate(self.rigs):
-            if existing.name == rig.name:
-                self.rigs[i] = rig
-                self.save()
-                return
-        self.rigs.append(rig)
-        self.save()
-
-    def rename(self, rig: Rig, new_name: str) -> str:
-        """Rename in place and persist. Returns the name actually used.
-
-        Not `replace()`: that matches on the name, which is the very thing
-        changing. Routed through unique_name() so a rename can't collide with an
-        existing rig and leave two entries answering to one name — `get()` would
-        then only ever find the first."""
-        new_name = new_name.strip()
-        if not new_name or new_name == rig.name:
-            return rig.name
-        # unique_name would otherwise count this rig itself as a collision.
-        others = [r for r in self.rigs if r is not rig]
-        candidate = RigLibrary(self.path, others).unique_name(new_name)
-        rig.name = candidate
-        self.save()
-        return candidate
-
-    def move(self, from_index: int, to_index: int) -> bool:
-        """Reorder the library. Order is the performance order — the sequence
-        next/previous steps through — so it is user-controlled, not creation
-        order, and it persists with everything else in the rig file."""
-        if not (0 <= from_index < len(self.rigs)):
-            return False
-        to_index = max(0, min(to_index, len(self.rigs) - 1))
-        if from_index == to_index:
-            return False
-        rig = self.rigs.pop(from_index)
-        self.rigs.insert(to_index, rig)
-        self.save()
-        return True
-
-    def step(self, current: str | None, delta: int) -> Rig | None:
-        """The next (or previous) rig in order, wrapping at the ends.
-
-        Wrapping because the alternative — stopping dead at the last rig — is
-        worse mid-song than looping round, and because a footswitch has no way
-        to show you that you've hit the end.
-        """
-        if not self.rigs:
-            return None
-        names = [r.name for r in self.rigs]
-        if current is None or current not in names:
-            return self.rigs[0]
-        return self.rigs[(names.index(current) + delta) % len(self.rigs)]
-
-    def remove(self, name: str) -> None:
-        self.rigs = [r for r in self.rigs if r.name != name]
-        self.save()
-
-    def bootstrap(self, default_voice: str) -> Rig | None:
-        """Guarantee something to play on a freshly flashed card, where no rigs
-        have been saved yet. Without this the unit would boot to an empty list
-        and make no sound until the user built a rig by hand."""
-        if self.rigs:
-            return self.rigs[0]
-        if not default_voice:
-            return None
-        return self.create_from_voice(default_voice)
-
-
 def read_rigs(path: str) -> list[Rig]:
-    """Parse the rig store. Missing or malformed file = no rigs (never fatal:
-    the instrument still plays from the voice catalog)."""
+    """Parse the pre-sets rig store, for migration only (see set.py).
+
+    Missing or malformed file = no rigs, never fatal: a board with no readable
+    rigs still boots and plays from the voice catalog.
+    """
     if not os.path.exists(path):
         return []
     try:
@@ -253,19 +175,3 @@ def read_rigs(path: str) -> list[Rig]:
     except Exception:
         logger.exception("could not read rigs from %s", path)
         return []
-
-
-def write_rigs(path: str, rigs: list[Rig]) -> bool:
-    """Persist the rig store. Written via a temp file + rename so a crash or a
-    pulled power cable can't leave a half-written store behind — this is the
-    user's own work, unlike the catalog, and isn't reproducible from the image."""
-    tmp = f"{path}.tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump([r.to_dict() for r in rigs], f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
-        return True
-    except OSError:
-        logger.exception("could not write rigs to %s", path)
-        return False

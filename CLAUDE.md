@@ -168,10 +168,11 @@ These live in `$HOME` on the board and are **not** overwritten by a deploy:
 
 | File | What |
 |---|---|
-| `~/.synth-rigs.json` | The user's rigs — the actual instrument |
+| `~/.synth-sets.json` | The user's sets, each holding its own rigs — the actual instrument |
+| `~/.synth-rigs.json` | Pre-sets rig store. Read once to migrate, then left alone as that migration's backup |
 | `~/.synth-trims.json` | Per-voice levels measured by `tools/calibrate_levels` |
 | `~/.synth-audio-device` | Selected ALSA card |
-| `~/.synth-state` | Last active rig |
+| `~/.synth-state` | Last active set and rig, by id (two lines) |
 | `~/.synth-brightness` | Screen brightness, 0.0–1.0 |
 
 ### Tools

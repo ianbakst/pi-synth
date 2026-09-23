@@ -1,7 +1,12 @@
 """TextEntryScreen — name something using the on-screen keyboard.
 
 Owns the text buffer; the Keyboard reports keystrokes and the TextField displays
-them. Used for naming a rig on creation and for renaming one later.
+them. Used for naming a rig or a set on creation, and for renaming one later.
+
+It doubles as the "manage this one thing" screen: `on_delete` puts a Delete
+action in the header. Deletion needs *somewhere*, and this is the screen you
+already reach by long-pressing the thing you mean — putting it on the tile
+itself would make a mis-aimed press destructive.
 """
 
 from collections.abc import Callable
@@ -25,6 +30,8 @@ class TextEntryScreen(Screen):
         on_done: Callable[[str], None],
         on_cancel: Callable[[], None],
         max_len: int = 40,
+        on_delete: Callable[[], None] | None = None,
+        delete_label: str = "Delete",
     ):
         self._initial = initial
         self._on_done = on_done
@@ -40,6 +47,9 @@ class TextEntryScreen(Screen):
             on_back=on_cancel,
             action_label="Done",
             on_action=self._done,
+            # Left of Done, so the button under your thumb stays the safe one.
+            action2_label=delete_label if on_delete else "",
+            on_action2=on_delete,
         )
         self.header.name = title
 

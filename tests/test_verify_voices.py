@@ -84,6 +84,29 @@ LV2INFO = """
 """
 
 
+ENUM_LV2INFO = """
+    Port 2:
+        Type:        http://lv2plug.in/ns/lv2core#ControlPort
+                     http://lv2plug.in/ns/lv2core#InputPort
+        Scale Points:
+            0 = "Shiny1"
+            5 = "Blah"
+
+        Symbol:      o1wave
+        Name:        Osc1 Wave
+        Minimum:     0.000000
+        Maximum:     28.000000
+"""
+
+
+def test_a_port_with_scale_points_is_still_listed():
+    """lv2info puts a blank line between a port's Scale Points and its Symbol.
+    Splitting records there hid every enumerated control from the tool that
+    exists to report them — including the wavetable selector this reported as
+    absent from Calf Wavetable."""
+    assert _control_ports(ENUM_LV2INFO) == [("o1wave", "Osc1 Wave")]
+
+
 def test_only_input_control_ports_are_listed():
     # Output controls are meters and LEDs — nothing a voice can set — and audio
     # ports aren't parameters at all.

@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, call
 
+from synth_ui.clients.lv2 import ControlPort, PortDefaults
 from synth_ui.clients.slots import InstrumentSlots
 from synth_ui.clients.voice import Voice
 
@@ -20,6 +21,14 @@ def synth(name, uri, **kw):
 def sampler(name, path):
     """A large sample library: not resident, so it uses the scratch slot."""
     return Voice(name=name, engine="sfizz", path=path, category="Piano")
+
+
+def defaults(**controls):
+    """A PortDefaults reporting these symbol=default controls, without running
+    lv2info. Slots consults it only to undo a control the incoming voice does
+    not mention."""
+    ports = [ControlPort(s, s, 0.0, 1.0, v) for s, v in controls.items()]
+    return PortDefaults(read=lambda uri: ports)
 
 
 def mh_ok():
@@ -194,6 +203,85 @@ def test_eviction_never_takes_the_scratch_slot():
     slots.acquire(synth("New", "urn:plugin:new"))
     assert slots.instance_of("New") != 9
     assert slots.instance_of("New") in range(0, 9)
+
+
+# --- one plugin, many voices ------------------------------------------------
+
+def test_two_voices_on_one_plugin_each_get_their_own_settings():
+    # The library multiplier: one plugin backs several voices, told apart only
+    # by their params. Matching on the URI alone handed the second voice the
+    # first one's instance untouched — the right name, the wrong sound, and
+    # nothing in the log to say so.
+    mh = mh_ok()
+    slots = InstrumentSlots(mh, defaults=defaults(cutoff=0.9))
+    slots.acquire(synth("Dark Pad", JX10_URI, params={"cutoff": 0.2}))
+    mh.reset_mock()
+
+    assert slots.acquire(synth("Bright Lead", JX10_URI, params={"cutoff": 0.8})) == 0
+    mh.load_plugin.assert_not_called()          # still no instantiation
+    mh.set_param.assert_called_once_with(0, "cutoff", "0.8")
+
+
+def test_a_control_the_next_voice_never_mentions_goes_back_to_default():
+    # The leak this exists to stop: a cutoff dialled down for one rig would
+    # otherwise follow the instrument into every other rig on it.
+    mh = mh_ok()
+    slots = InstrumentSlots(mh, defaults=defaults(cutoff=0.9))
+    slots.acquire(synth("Dark Pad", JX10_URI, params={"cutoff": 0.2}))
+    mh.reset_mock()
+
+    slots.acquire(synth("Stock JX10", JX10_URI))
+    mh.set_param.assert_called_once_with(0, "cutoff", "0.9")
+
+
+def test_reconciling_only_writes_what_differs():
+    mh = mh_ok()
+    slots = InstrumentSlots(mh, defaults=defaults())
+    slots.acquire(synth("A", JX10_URI, params={"cutoff": 0.2, "reso": 0.5}))
+    mh.reset_mock()
+
+    slots.acquire(synth("B", JX10_URI, params={"cutoff": 0.2, "reso": 0.7}))
+    mh.set_param.assert_called_once_with(0, "reso", "0.7")
+
+
+def test_reconciling_an_unchanged_voice_never_reads_the_plugin():
+    # lv2info is a subprocess. Selecting the rig you're already on must not
+    # pay for one — nothing has to be undone, so nothing has to be looked up.
+    reads = []
+    mh = mh_ok()
+    slots = InstrumentSlots(
+        mh, defaults=PortDefaults(read=lambda uri: reads.append(uri) or [])
+    )
+    voice = synth("A", JX10_URI, params={"cutoff": 0.2})
+    slots.acquire(voice)
+    slots.acquire(voice)
+    assert reads == []
+
+
+def test_a_new_preset_reapplies_every_param_over_it():
+    # A preset rewrites controls we have no record of, so the values we thought
+    # were already set can't be trusted to skip a write.
+    mh = mh_ok()
+    slots = InstrumentSlots(mh, defaults=defaults())
+    slots.acquire(synth("Jazz", EPIANO_URI, preset="urn:jazz", params={"decay": 0.4}))
+    mh.reset_mock()
+
+    slots.acquire(synth("Rock", EPIANO_URI, preset="urn:rock", params={"decay": 0.4}))
+    mh.preset_load.assert_called_once_with(0, "urn:rock")
+    mh.set_param.assert_called_once_with(0, "decay", "0.4")
+
+
+def test_a_live_edit_is_remembered_so_the_next_switch_undoes_it():
+    # The params screen writes straight to the plugin while it plays. A slot
+    # that didn't know would skip the write that puts the control back.
+    mh = mh_ok()
+    slots = InstrumentSlots(mh, defaults=defaults(cutoff=0.9))
+    slots.acquire(synth("A", JX10_URI))
+    slots.note_param(0, "cutoff", 0.3)
+    mh.reset_mock()
+
+    slots.acquire(synth("B", JX10_URI))
+    mh.set_param.assert_called_once_with(0, "cutoff", "0.9")
 
 
 def test_loading_clears_the_slot_first_so_a_desync_self_heals():

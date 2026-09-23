@@ -218,13 +218,38 @@ keyboard and go on feeding the sink, i.e. two instruments sounding at once.
 `EngineManager._unwire` does that, still connect-before-disconnect so there's no
 silent gap, and it leaves alone any port shared with the incoming engine.
 
-**Bypass isn't trusted for silence.** Whether mod-host's `bypass` skips the
-plugin's `run()` or merely passes audio through is mod-host's business, not
-something we can assume — so an inactive instrument is bypassed *and* has its
-MIDI disconnected. It gets no notes either way. If bypass turns out to be a true
-skip, resident voices are also free at idle; if it isn't, they cost some DSP and
-the eviction bound is what keeps that in check. Worth measuring with
-`journalctl -u jack | grep -c XRun` as the resident set grows.
+**Warming a set.** Entering a set pre-instantiates its rigs' instruments
+(`EngineManager.warm`, called from `app._start_set`) so every switch *within* a
+song is a bypass flip and a re-patch. It happens after the first rig is loaded —
+sound first, and it leaves the rig about to be played as most-recently-used so
+it can't be the one evicted. Non-resident voices are skipped: they share the one
+scratch slot, so warming two sample libraries would evict each in turn.
+
+Measured on the CM5, mod-host CPU over 8s windows with nothing playing:
+
+| warmed, bypassed | 0 | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| mod-host CPU | 0.2% | 0.5% | 0.4% | 0.6% | 1.7% |
+
+Eight warmed instruments cost ~1.5% of one core, no xruns. The 1/2/4 figures are
+inside the noise (~±0.2%) and don't order correctly — read it as roughly 0.2%
+each, too small to measure singly. Warming a whole set is not worth rationing.
+
+**Bypass does not skip processing.** Measured the same way, 8 bypassed and 8
+un-bypassed cost the same (1.7% vs 1.6%). mod-host's source says why: its bypass
+branch zeroes the buffers and then calls `lilv_instance_run()` anyway, with the
+comment *"Run the plugin with zero buffer to avoid 'pause behavior' in delay
+plugins"*. A bypassed reverb has to keep consuming silence or its tail freezes.
+So bypass buys silence, not CPU — this resolves the open question below.
+
+**Bypass isn't trusted for silence.** An inactive instrument is bypassed *and*
+has its MIDI disconnected, so it gets no notes by either route. That belt-and-
+braces turns out to be the right call for a second reason: bypass is not a skip
+(above), so a bypassed instrument still runs every period — what stops it making
+sound is that mod-host silences its output buffers, and what stops it having
+anything to say is the missing MIDI connection. Resident voices are therefore
+not free at idle, but at ~0.2% of a core each the eviction bound is more than
+enough to keep it in check.
 
 ## Rigs
 
@@ -232,9 +257,48 @@ A **rig** is instrument + effects chain + level, saved and switchable as one
 unit. Note the naming: "preset" already means a soundfont's bank/program here
 (`synth_client.Preset`, the preset screen), so the larger thing is a rig.
 
-Rigs live in `~/.synth-rigs.json`, written atomically — deliberately separate
-from `voices.json`, which is a read-only catalog shipped in the image. One is the
-user's own work created on the device; the other is what the image provides.
+**A rig belongs to exactly one set, and is stored inside it** (`clients/set.py`,
+`~/.synth-sets.json`, written atomically — deliberately separate from
+`voices.json`, which is a read-only catalog shipped in the image). A set is one
+song's worth of rigs: you enter it and see those four pads, and the footswitch
+walks those four rather than the whole store. `RigsScreen._step` iterates
+whatever list the screen holds, so scoping the list *is* the mechanism.
+
+Containment rather than reference — sets hold rigs, they don't point at them.
+Copying a rig into a second song costs a config file's worth of bytes, and buys
+more than it costs: a shared rig would change under you between songs, and
+per-song copies can't. It also removes every cross-reference bug — no dangling
+ids, no renaming a rig out from under what points at it. Removing a rig from a
+set *is* deleting it.
+
+Both sets and rigs carry a uuid and their names are metadata, so two songs can
+each hold a rig called "Rhodes" and renaming one can't turn it into a different
+rig. `~/.synth-state` records the active set and rig by id for the same reason.
+
+A board that predates sets is migrated on first load: its `~/.synth-rigs.json`
+becomes one set, in order, and the old file is left in place as the backup.
+
+**A rig carries the instrument's patch too** (`Rig.voice_params`, control symbol
+→ value). The catalog is read-only, shipped in the image and overwritten by
+`deploy.sh`, and one entry has to serve every rig built on it — so the values
+that make a sound (this pad's slow attack, that lead's cutoff) belong to the rig,
+not the voice. They are layered over the catalog entry's `params` when the rig
+loads, and only the *difference* from the catalog is stored, so a corrected value
+in a shipped voice still reaches the rigs built on it. The UI edits them live
+through the same screen an effect gets, because an LV2 instrument is a plugin
+with control ports like any other; tapping the instrument block opens it, and
+swapping the instrument moved to that screen's header.
+
+That makes one plugin backing several *rigs* as ordinary as one plugin backing
+several voices, which is why `InstrumentSlots` remembers what it last wrote to
+each slot and reconciles on acquire (`_reconcile`). Matching a loaded plugin on
+URI alone — which is all `_find` did — handed the next voice the previous one's
+settings untouched: the right name, the wrong sound, and nothing in the log.
+Controls the incoming voice doesn't mention go back to the plugin's default
+rather than being left alone, or a cutoff dialled down in one rig would follow
+the instrument into every other rig on it. Reading those defaults means running
+`lv2info`, so it happens only when something actually has to be undone, and is
+cached per plugin.
 
 **Loading a rig is a diff, not a rebuild.** The obvious implementation — tear the
 rack down, build the new one — makes every rig change pay to instantiate every
@@ -255,22 +319,35 @@ reach for when playing. The screen hierarchy moved accordingly:
 
 | screen | role |
 |---|---|
-| `screens/rigs.py` (**home**) | the saved rigs; tap to load. Actions: New / Edit / Audio |
-| `screens/voice_picker.py` | the instrument catalog, reached via **New**. Picking a voice creates a rig around it. Owns USB import, since that changes the catalog |
+| `screens/sets.py` (**home**) | the sets; tap to enter. Actions: New / Audio |
+| `screens/rigs.py` | one set's rigs; tap to load. Actions: Back / New / Edit |
+| `screens/voice_picker.py` | the instrument catalog, reached via **New**. Picking a voice creates a rig in the active set. Owns USB import, since that changes the catalog |
 | `screens/effects.py` | the active rig's chain. Leaving the screen writes it back to the rig |
+| `screens/text_entry.py` | naming — and, via `on_delete`, the only route to deleting a rig or a set |
 
-`screens/home.py` is gone — `VoicePickerScreen` is what it became.
+`screens/home.py` is gone — `VoicePickerScreen` is what it became. Audio sits on
+the sets screen because the rigs screen needs its Back arrow and the step
+buttons, and that plus three actions does not fit across 800px.
 
-Rules that live in `RigLibrary` rather than in the screens, so they're testable
-without pygame: rigs are named after the voice they start from with numeric
+**Entering a set you're not already in makes it active and loads its first
+usable rig**; re-entering the set you're in changes nothing, which is what makes
+coming back from editing a chain safe; and returning to the sets screen never
+changes what's playing. So the active rig can legitimately belong to a set that
+isn't on screen, and `RigsScreen.set_rigs` therefore does *not* clear it —
+browsing is not switching. Only `rig_removed` clears it, on an actual deletion.
+
+Rules that live in `SongSet`/`SetLibrary` rather than in the screens, so they're
+testable without pygame: rigs are named after the voice they start from with numeric
 suffixes on collision (two rigs on one instrument is normal — dry vs wet); a
-fresh card with no saved rigs bootstraps one from `DEFAULT_VOICE` so the unit
+fresh card with no sets bootstraps one holding a `DEFAULT_VOICE` rig so the unit
 boots into something playable; a rig whose voice has left the catalog is greyed
 with the reason rather than loading to silence.
 
-**There's no rename, and naming is automatic.** A touchscreen keyboard is a
-sizeable component and wasn't built, so a rig takes its instrument's name. That's
-the main rough edge in this flow.
+**Naming is automatic but no longer permanent.** A new rig still takes its
+instrument's name; the touchscreen keyboard that was missing exists now
+(`screens/text_entry.py`), so renaming is reachable by long-pressing a tile —
+and since the name is metadata rather than identity, a rename is a plain
+assignment that can't collide with anything.
 
 **A rig doesn't capture a soundfont program.** Picking a GM voice still drills
 into the preset screen, but the chosen bank/program isn't stored in the rig —

@@ -46,6 +46,10 @@ def format_value(port: ControlPort) -> Callable[[float], str]:
     """
     if port.toggled:
         return lambda v: "on" if v >= 0.5 else "off"
+    if port.scale_points:
+        # An enumerated control names its settings, and the name is the whole
+        # point: "Blah" and "Reed" are choosable by ear, 5 and 23 are not.
+        return lambda v: port.scale_points.get(round(v), f"{v:.0f}")
     if port.integer:
         return lambda v: f"{v:.0f}"
     return lambda v: f"{v:.2f}" if abs(port.maximum - port.minimum) <= 4 else f"{v:.1f}"
@@ -111,8 +115,11 @@ class ParamSliders(Component):
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.rect(surface, BG, self.rect)
         if not self.sliders:
+            # Not only effects any more: b_synth is a real case of an
+            # *instrument* with no control ports at all — its drawbars,
+            # percussion and Leslie are MIDI CC.
             text = self._font.render(
-                "This effect has no adjustable parameters", True, TEXT_SECONDARY
+                "No adjustable parameters", True, TEXT_SECONDARY
             )
             surface.blit(text, (self.rect.x + 20, self.rect.y + 20))
             return
@@ -175,9 +182,15 @@ class ParamSliders(Component):
         return False
 
 
-class EffectParamsScreen(Screen):
+class ParamsScreen(Screen):
     """Header + one slider per control port, with a Reset that returns every
-    control to the plugin's own default."""
+    control to its baseline.
+
+    Used for both halves of a chain. An LV2 instrument is a plugin with control
+    ports exactly like an effect is, so the instrument gets this same screen
+    rather than one of its own — `on_swap` is the only thing that differs, since
+    a rig can change its instrument but an effect is removed instead.
+    """
 
     def __init__(
         self,
@@ -187,6 +200,7 @@ class EffectParamsScreen(Screen):
         on_change: Callable[[str, float], None],
         on_back: Callable,
         on_reset: Callable | None = None,
+        on_swap: Callable | None = None,
     ):
         font_large = pygame.font.Font(None, 36)
         font_small = pygame.font.Font(None, 22)
@@ -197,6 +211,10 @@ class EffectParamsScreen(Screen):
             on_back=on_back,
             action_label="Reset" if on_reset else "",
             on_action=on_reset,
+            # Where swapping the instrument went when tapping its block came to
+            # mean "edit it", like every other block on the wire.
+            action2_label="Change" if on_swap else "",
+            on_action2=on_swap,
         )
         self.header.name = name
 

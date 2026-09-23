@@ -210,7 +210,7 @@ class TestInstrumentIsStructural:
     def test_tapping_the_instrument_opens_the_swap(self):
         swaps, edited = [], []
         c = chain(count=2, on_edit=edited.append)
-        c.on_change_instrument = lambda: swaps.append(True)
+        c.on_edit_instrument = lambda: swaps.append(True)
         pos = c.instrument_rect().center
         c.handle_event(UIEvent(pygame.FINGERDOWN, pos=pos))
         c.handle_event(UIEvent(pygame.FINGERUP, pos=pos))
@@ -245,7 +245,7 @@ class TestInstrumentIsStructural:
         the swap like the rest of it."""
         swaps, bypassed = [], []
         c = chain(count=1, on_bypass=lambda i, b: bypassed.append(i))
-        c.on_change_instrument = lambda: swaps.append(True)
+        c.on_edit_instrument = lambda: swaps.append(True)
         corner = c._dot_rect(c.instrument_rect()).center
         c.handle_event(UIEvent(pygame.FINGERDOWN, pos=corner))
         c.handle_event(UIEvent(pygame.FINGERUP, pos=corner))

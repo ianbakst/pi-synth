@@ -1,51 +1,78 @@
-"""Tests for rigs (instrument + effects + level) and the chain diff. No hardware."""
+"""Tests for what a rig is, and for the chain diff. No hardware.
+
+Where rigs *live* is set.py's problem now — a rig belongs to exactly one set and
+is stored inside it — so the library tests moved to test_set.py with it.
+"""
 
 import json
 
-from synth_ui.clients.rig import (
-    Rig,
-    RigEffect,
-    RigLibrary,
-    plan,
-    read_rigs,
-    write_rigs,
-)
+from synth_ui.clients.rig import Rig, RigEffect, plan, read_rigs
 
 REVERB = "urn:reverb"
 DELAY = "urn:delay"
 EQ = "urn:eq"
 
 
-# --- persistence ------------------------------------------------------------
+# --- what a rig is ----------------------------------------------------------
 
-def test_round_trips_through_the_store(tmp_path):
-    path = str(tmp_path / "rigs.json")
-    rigs = [
-        Rig(
-            name="Gospel B3",
-            voice="Hammond B3",
-            effects=[RigEffect(REVERB, {"decay": 2.5})],
-            trim_db=-1.5,
-            fixed_velocity=True,
-        ),
-        Rig(name="Dry Piano", voice="MDA Piano"),
-    ]
-    assert write_rigs(path, rigs) is True
-    back = read_rigs(path)
-    assert [r.name for r in back] == ["Gospel B3", "Dry Piano"]
-    assert back[0].effects[0].params == {"decay": 2.5}
-    assert back[0].trim_db == -1.5
-    assert back[0].fixed_velocity is True
-    assert back[1].effects == []
-    assert back[1].fixed_velocity is False
+def test_round_trips_through_its_own_serialisation():
+    rig = Rig(
+        name="Gospel B3",
+        voice="Hammond B3",
+        effects=[RigEffect(REVERB, {"decay": 2.5}, bypassed=True)],
+        voice_params={"drawbar": 8.0},
+        trim_db=-1.5,
+        fixed_velocity=True,
+    )
+    back = Rig.from_dict(rig.to_dict())
+    assert back.id == rig.id
+    assert back.name == "Gospel B3"
+    assert back.voice_params == {"drawbar": 8.0}
+    assert back.effects[0].params == {"decay": 2.5}
+    assert back.effects[0].bypassed is True
+    assert back.trim_db == -1.5
+    assert back.fixed_velocity is True
 
 
-def test_rigs_saved_before_fixed_velocity_existed_still_load(tmp_path):
-    # The rig store is the user's own work and outlives the feature set that
-    # wrote it: an older file has no such key and must read as "as struck".
+def test_every_rig_gets_an_identity_of_its_own():
+    assert Rig("A", "V").id != Rig("A", "V").id
+
+
+def test_two_rigs_may_share_a_name():
+    """The name is metadata. Two songs both wanting a "Rhodes" is normal, and
+    they are still different rigs."""
+    a, b = Rig("Rhodes", "Rhodes EP"), Rig("Rhodes", "Rhodes EP")
+    assert a.name == b.name and a.id != b.id
+
+
+def test_a_rig_saved_before_rigs_had_identity_is_given_one():
+    rig = Rig.from_dict({"name": "Old", "voice": "MDA Piano"})
+    assert rig.id
+    assert rig.name == "Old"
+
+
+def test_an_existing_identity_is_never_reminted():
+    entry = {"id": "fixed-id", "name": "Old", "voice": "MDA Piano"}
+    assert Rig.from_dict(entry).id == "fixed-id"
+    assert Rig.from_dict(entry).id == "fixed-id"
+
+
+def test_rigs_saved_before_fixed_velocity_existed_still_load():
+    # A rig outlives the feature set that wrote it: an older entry has no such
+    # key and must read as "as struck".
+    rig = Rig.from_dict({"name": "Old", "voice": "MDA Piano", "trim_db": 0.0})
+    assert rig.fixed_velocity is False
+    assert rig.voice_params == {}
+
+
+# --- reading the pre-sets store (migration only) ----------------------------
+
+def test_the_legacy_store_still_reads(tmp_path):
     path = tmp_path / "rigs.json"
-    path.write_text('[{"name": "Old", "voice": "MDA Piano", "trim_db": 0.0}]')
-    assert read_rigs(str(path))[0].fixed_velocity is False
+    path.write_text(json.dumps([{"name": "Old", "voice": "MDA Piano"}]))
+    rigs = read_rigs(str(path))
+    assert [r.name for r in rigs] == ["Old"]
+    assert rigs[0].id
 
 
 def test_missing_store_is_not_an_error(tmp_path):
@@ -56,15 +83,6 @@ def test_malformed_store_does_not_break_the_instrument(tmp_path):
     path = tmp_path / "rigs.json"
     path.write_text("{ not json")
     assert read_rigs(str(path)) == []
-
-
-def test_store_is_written_atomically(tmp_path):
-    # The user's own work, unlike the shipped catalog — a half-written file on
-    # power loss would lose it.
-    path = str(tmp_path / "rigs.json")
-    write_rigs(path, [Rig(name="A", voice="V")])
-    assert not (tmp_path / "rigs.json.tmp").exists()
-    assert json.loads((tmp_path / "rigs.json").read_text())[0]["name"] == "A"
 
 
 # --- chain diff -------------------------------------------------------------
@@ -116,149 +134,3 @@ def test_empty_target_clears_the_chain():
     assert p.order == []
 
 
-# --- library ----------------------------------------------------------------
-
-def test_new_rig_is_named_after_its_voice(tmp_path):
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    rig = lib.create_from_voice("Rhodes EP")
-    assert rig.name == "Rhodes EP"
-    assert rig.voice == "Rhodes EP"
-    assert rig.effects == []
-
-
-def test_picking_the_same_voice_twice_gets_a_distinct_name(tmp_path):
-    # Building two rigs on one instrument is normal (dry vs wet), so names have
-    # to diverge rather than collide.
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    assert lib.create_from_voice("Rhodes EP").name == "Rhodes EP"
-    assert lib.create_from_voice("Rhodes EP").name == "Rhodes EP 2"
-    assert lib.create_from_voice("Rhodes EP").name == "Rhodes EP 3"
-
-
-def test_creating_a_rig_persists_it(tmp_path):
-    path = str(tmp_path / "rigs.json")
-    RigLibrary(path).create_from_voice("Hammond B3")
-    assert [r.name for r in RigLibrary.load(path).rigs] == ["Hammond B3"]
-
-
-def test_replace_updates_in_place_and_saves(tmp_path):
-    path = str(tmp_path / "rigs.json")
-    lib = RigLibrary(path)
-    rig = lib.create_from_voice("Hammond B3")
-    rig.effects = [RigEffect(REVERB)]
-    lib.replace(rig)
-    reloaded = RigLibrary.load(path)
-    assert len(reloaded.rigs) == 1
-    assert reloaded.rigs[0].effects[0].uri == REVERB
-
-
-def test_remove_deletes_and_saves(tmp_path):
-    path = str(tmp_path / "rigs.json")
-    lib = RigLibrary(path)
-    lib.create_from_voice("A")
-    lib.create_from_voice("B")
-    lib.remove("A")
-    assert RigLibrary.load(path).names() == ["B"]
-
-
-def test_bootstrap_creates_a_rig_on_a_fresh_card(tmp_path):
-    # No rigs saved yet: the unit must still boot into something playable
-    # rather than an empty list.
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    rig = lib.bootstrap("General MIDI")
-    assert rig is not None and rig.voice == "General MIDI"
-    assert lib.names() == ["General MIDI"]
-
-
-def test_bootstrap_leaves_an_existing_library_alone(tmp_path):
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    lib.create_from_voice("Hammond B3")
-    lib.bootstrap("General MIDI")
-    assert lib.names() == ["Hammond B3"]
-
-
-def test_rename_persists(tmp_path):
-    path = str(tmp_path / "rigs.json")
-    lib = RigLibrary(path)
-    rig = lib.create_from_voice("Hammond B3")
-    assert lib.rename(rig, "Gospel B3") == "Gospel B3"
-    assert RigLibrary.load(path).names() == ["Gospel B3"]
-
-
-def test_rename_onto_an_existing_name_is_deduplicated(tmp_path):
-    # Two rigs answering to one name would make get() only ever find the first.
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    lib.create_from_voice("Rhodes EP")
-    other = lib.create_from_voice("Hammond B3")
-    assert lib.rename(other, "Rhodes EP") == "Rhodes EP 2"
-    assert sorted(lib.names()) == ["Rhodes EP", "Rhodes EP 2"]
-
-
-def test_renaming_a_rig_to_its_own_name_is_a_noop(tmp_path):
-    # Must not treat the rig itself as a collision and become "X 2".
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    rig = lib.create_from_voice("Rhodes EP")
-    assert lib.rename(rig, "Rhodes EP") == "Rhodes EP"
-    assert lib.names() == ["Rhodes EP"]
-
-
-def test_an_empty_rename_keeps_the_old_name(tmp_path):
-    lib = RigLibrary(str(tmp_path / "rigs.json"))
-    rig = lib.create_from_voice("Rhodes EP")
-    assert lib.rename(rig, "   ") == "Rhodes EP"
-
-
-class TestOrdering:
-    """Rig order is performance order — what next/previous steps through."""
-
-    def library(self, tmp_path, names):
-        from synth_ui.clients.rig import Rig, RigLibrary
-
-        return RigLibrary(str(tmp_path / "rigs.json"), [Rig(n, n) for n in names])
-
-    def test_move_reorders(self, tmp_path):
-        lib = self.library(tmp_path, ["A", "B", "C"])
-        assert lib.move(2, 0)
-        assert lib.names() == ["C", "A", "B"]
-
-    def test_move_persists(self, tmp_path):
-        from synth_ui.clients.rig import RigLibrary
-
-        lib = self.library(tmp_path, ["A", "B", "C"])
-        lib.move(0, 2)
-        assert RigLibrary.load(lib.path).names() == ["B", "C", "A"]
-
-    def test_move_to_the_same_place_is_a_noop(self, tmp_path):
-        assert not self.library(tmp_path, ["A", "B"]).move(1, 1)
-
-    def test_move_clamps_past_the_end(self, tmp_path):
-        lib = self.library(tmp_path, ["A", "B", "C"])
-        assert lib.move(0, 99)
-        assert lib.names() == ["B", "C", "A"]
-
-    def test_move_rejects_a_bad_source(self, tmp_path):
-        assert not self.library(tmp_path, ["A"]).move(5, 0)
-
-    def test_step_forward(self, tmp_path):
-        lib = self.library(tmp_path, ["A", "B", "C"])
-        assert lib.step("A", 1).name == "B"
-
-    def test_step_back(self, tmp_path):
-        lib = self.library(tmp_path, ["A", "B", "C"])
-        assert lib.step("B", -1).name == "A"
-
-    def test_step_wraps_both_ways(self, tmp_path):
-        """A footswitch can't show you that you've hit the end, so stopping
-        dead there is worse than looping."""
-        lib = self.library(tmp_path, ["A", "B", "C"])
-        assert lib.step("C", 1).name == "A"
-        assert lib.step("A", -1).name == "C"
-
-    def test_step_from_nothing_gives_the_first(self, tmp_path):
-        assert self.library(tmp_path, ["A", "B"]).step(None, 1).name == "A"
-
-    def test_step_from_a_deleted_rig_gives_the_first(self, tmp_path):
-        assert self.library(tmp_path, ["A", "B"]).step("gone", 1).name == "A"
-
-    def test_step_on_an_empty_library_is_none(self, tmp_path):
-        assert self.library(tmp_path, []).step(None, 1) is None

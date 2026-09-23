@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 
-from synth_ui.clients.lv2 import LV2World, spec_for
+from synth_ui.clients.lv2 import LV2World, port_blocks, spec_for
 from synth_ui.clients.voice import annotate, read_voices_manifest
 from synth_ui.config import VOICES_MANIFEST
 
@@ -90,9 +90,20 @@ def _lv2info(uri: str) -> str | None:
 
 
 def _control_ports(info: str) -> list[tuple[str, str]]:
-    """(symbol, name) for each input control port, in port order."""
+    """(symbol, name) for each input control port, in port order.
+
+    Every one of them, including ports with no declared range — the UI skips
+    those because it can't draw a slider for them, but they are still settable
+    through `params`, which is the question this tool answers.
+
+    Records come from lv2.port_blocks rather than being split here. Splitting on
+    blank lines, as this did, tore apart every port that lists Scale Points —
+    lv2info puts a blank line between the points and the symbol — so the tool
+    documented as the way to find a voice's symbols reported that Calf Wavetable
+    had no wavetable selector.
+    """
     ports: list[tuple[str, str]] = []
-    for block in info.split("\n\n"):
+    for block in port_blocks(info):
         if "ControlPort" not in block or "InputPort" not in block:
             continue
         symbol = re.search(r"Symbol:\s*(\S+)", block)

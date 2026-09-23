@@ -26,7 +26,7 @@ FADER_W = 96
 class EffectsScreen(Screen):
     """The active rig's chain and level — effectively the rig editor.
 
-    Leaving the screen writes both back to the rig (app._sync_active_rig_effects),
+    Leaving the screen writes both back to the rig (app._sync_active_rig),
     so there is no separate save step to forget."""
 
     def __init__(
@@ -40,7 +40,7 @@ class EffectsScreen(Screen):
         on_edit: Callable[[int], None] | None = None,
         on_trim_change: Callable[[float], None] | None = None,
         on_reorder: Callable[[int, int], None] | None = None,
-        on_change_instrument: Callable | None = None,
+        on_edit_instrument: Callable | None = None,
         on_fixed_velocity: Callable[[bool], None] | None = None,
         initial_trim: float = 0.0,
         initial_fixed_velocity: bool = False,
@@ -92,7 +92,7 @@ class EffectsScreen(Screen):
             on_bypass=on_bypass or (lambda i, b: None),
             on_add=lambda index: on_add(index),
             on_reorder=on_reorder or (lambda a, b: None),
-            on_change_instrument=on_change_instrument,
+            on_edit_instrument=on_edit_instrument,
             source_name=source_name,
         )
         self.trim_slider = Slider(
