@@ -4,15 +4,18 @@ After=multi-user.target
 
 [Service]
 Type=oneshot
-# 1) CPU governor -> performance.
-# 2) All IRQs -> core 0 (mask 1): keeps interrupt handling OFF the isolated audio
-#    cores 1,2,3. (Was mask 3 = cores 0,1, but core 1 now runs JACK.)
-# 3) Best-effort: steer the I2S/DAC IRQ -> core 1 (mask 2), co-located with JACK's
-#    backend. The grep is heuristic — the real per-period audio IRQ may be a DMA
-#    channel; verify on the board with `cat /proc/interrupts` (the count that
-#    climbs while audio plays) and adjust the pattern. Fallback (audio IRQ on
-#    core 0) is harmless: it's still off the DSP cores.
-ExecStart=/bin/bash -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null; for irq in /proc/irq/[0-9]*/; do echo 1 > ${irq}smp_affinity 2>/dev/null || true; done; for n in $(grep -iE "i2s|pcm51|hifiberry" /proc/interrupts | sed -E "s/^[[:space:]]*([0-9]+):.*/\1/"); do echo 2 > /proc/irq/$n/smp_affinity 2>/dev/null || true; done'
+RemainAfterExit=yes
+# 1) CPU governor -> performance, immediately.
+ExecStart=/bin/bash -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null'
+# 2) IRQs -> core 0, off the isolated audio cores. In its own script because it
+#    has to run several times: an IRQ that no driver has registered yet cannot
+#    be steered, and a single pass at boot left 44 of this board's IRQs on the
+#    default all-CPU mask. See scripts/set-irq-affinity.sh for the measurements.
+#
+#    This takes ~20s and nothing is ordered after this unit, so it delays
+#    nothing. Not backgrounded: systemd would kill it with the control group
+#    when the main process exited.
+ExecStart=/home/synth/synth/scripts/set-irq-affinity.sh
 
 [Install]
 WantedBy=multi-user.target

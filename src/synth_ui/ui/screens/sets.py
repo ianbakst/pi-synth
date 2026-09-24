@@ -9,9 +9,8 @@ you're already in changes nothing — you keep whatever you were on, which is th
 case that matters when you come back from editing a chain. Coming back out to
 this screen never changes what's playing either: browsing is not switching.
 
-Header actions: New (a set), Audio (output device). Audio lives here rather than
-on the rigs screen because that one needs its Back arrow and the step buttons,
-and four controls plus a name do not fit across 800px.
+Header: New (a set), and the settings cog, which sits in the same top-right slot
+on every screen that has one.
 """
 
 from collections.abc import Callable
@@ -44,7 +43,7 @@ class SetsScreen(Screen):
         on_enter_set: Callable[[SongSet], None],
         on_edit_set: Callable[[SongSet], None],
         on_new: Callable,
-        on_audio: Callable,
+        on_settings: Callable,
         on_gain_change: Callable[[float], None],
         on_reorder: Callable[[int, int], None] | None = None,
         initial_gain: float = DEFAULT_GAIN,
@@ -62,8 +61,7 @@ class SetsScreen(Screen):
             font=font_large,
             action_label="New",
             on_action=on_new,
-            action2_label="Audio",
-            on_action2=on_audio,
+            on_settings=on_settings,
         )
         self.header.name = "Sets"
 

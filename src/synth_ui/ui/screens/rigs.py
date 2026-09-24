@@ -9,10 +9,9 @@ of sets: four rigs for a song means four pads here, and next/previous — on the
 steppers or on a footswitch — walks those four. `_step` iterates whatever list
 this screen holds, so scoping the list is the entire mechanism.
 
-Header actions: Back (to the sets screen), New (build a rig from a voice), Edit
-(this rig's chain). Audio lives on the sets screen: Back plus the step buttons
-plus three actions does not fit across 800px. USB lives on the voice picker,
-since importing soundfonts is about the catalog, not about rigs.
+Header: Back (to the sets screen), New (build a rig from a voice), Edit (this
+rig's chain), and the settings cog in its usual top-right slot. USB lives on the
+voice picker, since importing soundfonts is about the catalog, not about rigs.
 
 The **active rig** — what is loaded and making sound — is held here, and the
 rest of the app reads it (`app._sync_active_rig`, the chain and params screens).
@@ -57,6 +56,7 @@ class RigsScreen(Screen):
         on_edit: Callable,
         on_back: Callable,
         on_gain_change: Callable[[float], None],
+        on_settings: Callable | None = None,
         on_reorder: Callable[[int, int], None] | None = None,
         effect_names: dict[str, str] | None = None,
         unavailable: Callable[[Rig], str] | None = None,
@@ -79,6 +79,7 @@ class RigsScreen(Screen):
             on_action2=on_edit,
             on_prev=self.select_previous,
             on_next=self.select_next,
+            on_settings=on_settings,
         )
         self._rigs = rigs
         self._effect_names = effect_names or {}

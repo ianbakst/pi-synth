@@ -50,6 +50,15 @@ set -e
 changed=0
 for unit in $PROJECT/systemd/*.service; do
     name=\$(basename "\$unit")
+    # An empty unit file is how systemd spells "masked", so a truncated
+    # transfer silently disables the unit rather than failing. That happened:
+    # a deploy over a flaky link left cpu-performance.service at 0 bytes, so
+    # the next boot ran with the governor at ondemand and no IRQ pinning, and
+    # nothing said a word.
+    if [ ! -s "\$unit" ]; then
+        echo "refusing to install empty \$name — transfer was truncated" >&2
+        exit 1
+    fi
     if ! cmp -s "\$unit" "/etc/systemd/system/\$name"; then
         sudo install -m 644 "\$unit" "/etc/systemd/system/\$name"
         echo "installed \$name"

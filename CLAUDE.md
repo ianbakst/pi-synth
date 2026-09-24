@@ -171,7 +171,7 @@ These live in `$HOME` on the board and are **not** overwritten by a deploy:
 | `~/.synth-sets.json` | The user's sets, each holding its own rigs — the actual instrument |
 | `~/.synth-rigs.json` | Pre-sets rig store. Read once to migrate, then left alone as that migration's backup |
 | `~/.synth-trims.json` | Per-voice levels measured by `tools/calibrate_levels` |
-| `~/.synth-audio-device` | Selected ALSA card |
+| `~/.synth-audio-device` | Selected ALSA card. Nothing writes it any more — `start-jack.sh` resolves the DAC by name — but it still overrides if written by hand |
 | `~/.synth-state` | Last active set and rig, by id (two lines) |
 | `~/.synth-brightness` | Screen brightness, 0.0–1.0 |
 
@@ -195,3 +195,13 @@ All under `python3 -m synth_ui.tools.*`, run on the board:
   fluidsynth, but the package is present for `libfluidsynth` and its unit would
   otherwise take the DAC from JACK.
 - Don't disable `wpa_supplicant` — it kills WiFi SSH.
+- **WiFi power save makes the board unreachable while it still looks online.**
+  `brcmfmac` defaults to power save on. The board stays associated and keeps
+  answering ARP — which is broadcast — while dropping unicast, so it holds its
+  address and the settings screen shows `wlan0 <addr>`, but it answers neither
+  ping nor SSH. It comes back on a power cycle, or whenever the Pi itself sends
+  something. Measured on this unit: single AP, −46 dBm, so neither range nor
+  roaming. Disabled by `os-image/stage-pi-synth/07-wifi` writing
+  `/etc/NetworkManager/conf.d/wifi-powersave-off.conf`; check a suspect unit with
+  `/usr/sbin/iw dev wlan0 get power_save` (`iw` is installed but not on a
+  non-login shell's PATH, hence the full path).

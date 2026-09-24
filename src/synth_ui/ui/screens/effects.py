@@ -42,6 +42,7 @@ class EffectsScreen(Screen):
         on_reorder: Callable[[int, int], None] | None = None,
         on_edit_instrument: Callable | None = None,
         on_fixed_velocity: Callable[[bool], None] | None = None,
+        on_settings: Callable | None = None,
         initial_trim: float = 0.0,
         initial_fixed_velocity: bool = False,
         source_name: str = "",
@@ -59,6 +60,7 @@ class EffectsScreen(Screen):
             on_back=on_back,
             action_label="Add",
             on_action=on_add,
+            on_settings=on_settings,
         )
         self.header.name = rig_name or "Chain"
 

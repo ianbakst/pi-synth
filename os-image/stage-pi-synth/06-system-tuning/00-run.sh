@@ -13,10 +13,13 @@ mkdir -p "${ROOTFS_DIR}/etc/udev/rules.d"
 install -m 644 files/99-backlight.rules \
 	"${ROOTFS_DIR}/etc/udev/rules.d/99-backlight.rules"
 
-# RAM-only journal.
+# Journal on disk, capped — see files/journald-persistent.conf for the tradeoff.
 mkdir -p "${ROOTFS_DIR}/etc/systemd/journald.conf.d"
-install -m 644 files/journald-volatile.conf \
-	"${ROOTFS_DIR}/etc/systemd/journald.conf.d/volatile.conf"
+install -m 644 files/journald-persistent.conf \
+	"${ROOTFS_DIR}/etc/systemd/journald.conf.d/persistent.conf"
+# The old drop-in, from when logs were kept in RAM. Removed by name so an image
+# rebuilt over an existing rootfs doesn't end up with both and the wrong winner.
+rm -f "${ROOTFS_DIR}/etc/systemd/journald.conf.d/volatile.conf"
 
 # --- RemoveIPC=no: stop SSH logouts from killing the audio stack ---
 # systemd-logind defaults to RemoveIPC=yes, which destroys every POSIX shared

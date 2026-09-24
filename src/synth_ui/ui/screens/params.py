@@ -201,6 +201,7 @@ class ParamsScreen(Screen):
         on_back: Callable,
         on_reset: Callable | None = None,
         on_swap: Callable | None = None,
+        on_settings: Callable | None = None,
     ):
         font_large = pygame.font.Font(None, 36)
         font_small = pygame.font.Font(None, 22)
@@ -215,6 +216,7 @@ class ParamsScreen(Screen):
             # mean "edit it", like every other block on the wire.
             action2_label="Change" if on_swap else "",
             on_action2=on_swap,
+            on_settings=on_settings,
         )
         self.header.name = name
 

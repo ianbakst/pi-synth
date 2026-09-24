@@ -1,4 +1,5 @@
 import os
+import subprocess
 import threading
 from dataclasses import replace
 
@@ -13,6 +14,15 @@ from synth_ui.clients.effects_catalog import (
     read_effects_manifest,
 )
 from synth_ui.clients.midi_control import MidiControlListener
+from synth_ui.clients.network import (
+    enable_wifi,
+    ensure_wifi_on,
+    set_wifi,
+    wifi_enabled,
+)
+from synth_ui.clients.network import (
+    interfaces as network_interfaces,
+)
 from synth_ui.clients.rig import Rig, RigEffect
 from synth_ui.clients.set import SetLibrary, SongSet
 from synth_ui.clients.voice import Voice
@@ -38,12 +48,12 @@ from synth_ui.config import (
     VOICES_MANIFEST,
 )
 from synth_ui.ui.event import UIEvent
-from synth_ui.ui.screens.audio import AudioScreen
 from synth_ui.ui.screens.base import Screen
 from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
 from synth_ui.ui.screens.params import ParamsScreen
 from synth_ui.ui.screens.rigs import RigsScreen
 from synth_ui.ui.screens.sets import SetsScreen
+from synth_ui.ui.screens.settings import SettingsScreen
 from synth_ui.ui.screens.splash import SplashScreen
 from synth_ui.ui.screens.text_entry import TextEntryScreen
 from synth_ui.ui.screens.usb import USBScreen
@@ -76,6 +86,40 @@ def _save_state(set_id: str, rig_id: str) -> None:
     try:
         with open(STATE_FILE, "w") as f:
             f.write(f"{set_id}\n{rig_id}\n")
+    except Exception:
+        pass
+
+
+def _set_wifi(enabled: bool) -> bool:
+    """Switching off is one command; switching on has to be waited for.
+
+    `nmcli radio wifi on` returns before the interface is back, so reporting its
+    success as "WiFi is on" told the player the box was reachable when it was
+    not — on a box whose only way in is that radio.
+    """
+    return enable_wifi() if enabled else set_wifi(False)
+
+
+def _shutdown() -> None:
+    """Power off cleanly.
+
+    The box has no power switch — it is switched off by pulling the plug, which
+    is also how an SD card gets corrupted. This is the only way to stop the
+    writes first.
+    """
+    _power_off(["sudo", "systemctl", "poweroff"])
+
+
+def _restart() -> None:
+    """Reboot. Distinct from pulling the plug and back in for the same reason
+    shutdown is, and it is the honest way to recover a box whose audio stack has
+    got itself into a state — the touchscreen is the only console it has."""
+    _power_off(["sudo", "systemctl", "reboot"])
+
+
+def _power_off(command: list[str]) -> None:
+    try:
+        subprocess.run(command, timeout=10)
     except Exception:
         pass
 
@@ -137,7 +181,7 @@ class SynthUI:
             mod_host_port=MOD_HOST_PORT,
         )
         self._gain: float = DEFAULT_GAIN
-        self._audio_screen: AudioScreen | None = None
+        self._settings_screen: SettingsScreen | None = None
         self._effects_screen: EffectsScreen | None = None
         self._catalog_screen: EffectsCatalogScreen | None = None
         self._params_screen: ParamsScreen | None = None
@@ -168,7 +212,7 @@ class SynthUI:
             on_enter_set=self._enter_set,
             on_edit_set=self._show_set_rename_screen,
             on_new=self._on_new_set,
-            on_audio=self._show_audio_screen,
+            on_settings=self._show_settings_screen,
             on_gain_change=self._on_gain_change,
             on_reorder=self._on_reorder_sets,
             initial_gain=self._gain,
@@ -181,6 +225,7 @@ class SynthUI:
             on_edit=self._show_effects_screen,
             on_back=self._show_home,
             on_gain_change=self._on_gain_change,
+            on_settings=self._show_settings_screen,
             on_reorder=self._on_reorder_rigs,
             effect_names={e.uri: e.name for e in self._catalog},
             unavailable=self._rig_unavailable,
@@ -199,6 +244,10 @@ class SynthUI:
             on_program=self._select_rig_by_index if MIDI_PROGRAM_SELECTS_RIG else None,
         )
         self._midi_control.start()
+        # A WiFi toggle is for one session only: this box has no Ethernet, and a
+        # remembered "off" would leave no way in when it is needed most. See
+        # clients/network.set_wifi.
+        threading.Thread(target=ensure_wifi_on, daemon=True).start()
 
         # Restore the panel brightness before anything is drawn, so the first
         # thing on screen is already at the level the player left it.
@@ -578,12 +627,20 @@ class SynthUI:
         if self._picker is not None:
             self._picker.refresh()
 
-    def _show_audio_screen(self) -> None:
-        self._audio_screen = AudioScreen(
-            cards=self._engine.list_audio_cards(),
-            current_id=self._engine.current_audio_device(),
-            on_select=self._on_audio_selected,
+    def _show_settings_screen(self) -> None:
+        """The cog, from any screen that has one. Back always returns home
+        rather than to wherever you came from: settings is a detour, and a Back
+        that lands somewhere different each time is worse than one that always
+        lands in the same place."""
+        self._settings_screen = SettingsScreen(
             on_back=self._show_home,
+            midi_inputs=self._engine.midi_inputs,
+            on_reconnect_midi=self._engine.reattach_midi,
+            interfaces=network_interfaces,
+            wifi_enabled=wifi_enabled,
+            on_set_wifi=_set_wifi,
+            on_shutdown=_shutdown,
+            on_restart=_restart,
             # Both None on a board with no backlight, which hides the slider
             # rather than showing one that does nothing.
             on_brightness=(
@@ -593,7 +650,7 @@ class SynthUI:
                 self._brightness if self._backlight.available else None
             ),
         )
-        self.screen = self._audio_screen
+        self.screen = self._settings_screen
 
     def _on_brightness(self, fraction: float) -> None:
         """Applied live while dragging; saved on each change.
@@ -605,26 +662,6 @@ class SynthUI:
         self._brightness = fraction
         self._backlight.set_fraction(fraction)
         _save_brightness(fraction)
-
-    def _on_audio_selected(self, card_id: str) -> None:
-        # Restarting jack + rebuilding the voice takes seconds — do it off the UI
-        # thread and show a switching state meanwhile.
-        if self._audio_screen is None:
-            return
-        self._audio_screen.set_loading(True)
-        self._audio_screen.header.name = "Switching audio..."
-        threading.Thread(
-            target=self._apply_audio, args=(card_id,), daemon=True
-        ).start()
-
-    def _apply_audio(self, card_id: str) -> None:
-        ok = self._engine.set_audio_device(card_id)
-        if ok:
-            self._show_home()
-        elif self._audio_screen is not None:
-            self._audio_screen.set_loading(False)
-            self._audio_screen.header.error = True
-            self._audio_screen.header.name = "Audio switch failed"
 
     def _show_effects_screen(self) -> None:
         rig = self._rig_screen.active_rig
@@ -646,6 +683,7 @@ class SynthUI:
                 if self._engine.fixed_velocity_available()
                 else None
             ),
+            on_settings=self._show_settings_screen,
             initial_trim=rig.trim_db if rig is not None else 0.0,
             initial_fixed_velocity=rig.fixed_velocity if rig is not None else False,
             source_name=rig.voice if rig is not None else "",
@@ -731,6 +769,7 @@ class SynthUI:
             ),
             on_back=self._show_effects_screen,
             on_reset=lambda: self._reset_effect_params(instance),
+            on_settings=self._show_settings_screen,
         )
         self.screen = self._params_screen
 
@@ -765,6 +804,7 @@ class SynthUI:
             on_back=self._show_effects_screen,
             on_reset=self._reset_voice_params,
             on_swap=self._show_instrument_swap,
+            on_settings=self._show_settings_screen,
         )
         self.screen = self._params_screen
 

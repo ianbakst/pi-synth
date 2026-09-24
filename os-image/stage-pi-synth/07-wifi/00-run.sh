@@ -8,6 +8,28 @@
 # NetworkManager: a /etc/NetworkManager/system-connections/*.nmconnection profile
 # — NOT the obsolete boot-partition wpa_supplicant.conf.
 
+# --- WiFi power saving: off, always -------------------------------------------
+#
+# Written before the wifi.env check below, because this applies to any unit on
+# WiFi whether or not the image baked a connection into it.
+#
+# The symptom it fixes: the board stays associated and keeps answering ARP —
+# which is broadcast — while dropping unicast, so it holds its address and
+# looks online from its own screen but answers neither ping nor SSH. It comes
+# back on a power cycle, or whenever the Pi itself sends something. That is
+# brcmfmac's power save, and it bit this board three times in one afternoon.
+#
+# NetworkManager's default is `0` (use the global default), which leaves the
+# driver's own choice in place; `2` is disable. There is nothing to weigh here:
+# the instrument is mains-powered and its only route in is this radio.
+PS_CONF="${ROOTFS_DIR}/etc/NetworkManager/conf.d/wifi-powersave-off.conf"
+mkdir -p "$(dirname "${PS_CONF}")"
+cat > "${PS_CONF}" <<'EOF'
+[connection]
+wifi.powersave = 2
+EOF
+echo "wifi: disabled WiFi power saving"
+
 WIFI_ENV="${PI_SYNTH_SRC}/os-image/wifi.env"
 if [ ! -f "${WIFI_ENV}" ]; then
 	echo "wifi: no os-image/wifi.env — skipping WiFi provisioning"

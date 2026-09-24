@@ -632,3 +632,34 @@ def test_the_set_booted_into_is_warmed_too(tmp_path, monkeypatch):
     assert ui._active_set is song_set
     assert ui._rig_screen.active_rig.name == "Pad"
     assert ui._engine.warmed == [["Calf Wavetable"]]
+
+
+# --- the cog reaches settings from every screen that has one ----------------
+
+def test_the_cog_opens_settings_from_the_chain_screen():
+    from synth_ui.clients.rig import Rig
+
+    ui = _rig_ui(Rig("Pad", "Calf Wavetable"))
+    ui._backlight = type("B", (), {"available": False})()
+    ui._engine.midi_inputs = lambda: []
+    ui._engine.reattach_midi = lambda: True
+
+    ui._effects_screen.header.on_settings()
+
+    assert ui._settings_screen is not None
+    ui._settings_screen.draw(pygame.Surface((800, 480)))
+
+
+def test_the_screens_the_app_builds_carry_the_cog():
+    """The chain and the params screens are built by app methods, so this is
+    the app's own wiring rather than the fixture's."""
+    from synth_ui.clients.rig import Rig
+
+    ui = _rig_ui(Rig("Pad", "Calf Wavetable"))
+    assert ui._effects_screen.header.on_settings is not None
+
+    ui._show_voice_params_screen()
+    assert ui._params_screen.header.on_settings is not None
+
+    ui._show_effect_params_screen(10)
+    assert ui._params_screen.header.on_settings is not None

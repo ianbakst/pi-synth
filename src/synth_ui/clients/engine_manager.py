@@ -315,6 +315,27 @@ class EngineManager:
         voice_trim = self._active.voice.gain_trim_db if self._active else 0.0
         self._master.set_trim_db(voice_trim + db)
 
+    def midi_inputs(self) -> list[str]:
+        """Physical MIDI sources visible right now — the USB keyboards and the
+        DIN jack. What the settings screen shows, because on a box with no
+        console this is the only way to tell a sleeping piano from a cable."""
+        return self._jack.keyboard_midi_sources()
+
+    def reattach_midi(self) -> bool:
+        """Re-patch the keyboards into whatever is playing.
+
+        JACK connections to a keyboard are only made when the graph is wired,
+        which happens on a rig load. A piano switched on — or woken from its
+        30-minute Auto Off — after that appears as a new JACK port that nothing
+        connects, and the keys are dead until you change rigs. This is that
+        reconnection on demand; `_wire` is idempotent, so it costs nothing when
+        everything is already attached.
+        """
+        if self._active is None:
+            return False
+        self._wire(self._active)
+        return True
+
     def fixed_velocity_available(self) -> bool:
         """Whether this board can flatten velocity — i.e. whether x42-plugins is
         installed. False is a reason for the UI to hide the control, not an

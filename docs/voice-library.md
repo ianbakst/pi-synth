@@ -324,10 +324,21 @@ reach for when playing. The screen hierarchy moved accordingly:
 | `screens/voice_picker.py` | the instrument catalog, reached via **New**. Picking a voice creates a rig in the active set. Owns USB import, since that changes the catalog |
 | `screens/effects.py` | the active rig's chain. Leaving the screen writes it back to the rig |
 | `screens/text_entry.py` | naming — and, via `on_delete`, the only route to deleting a rig or a set |
+| `screens/settings.py` | brightness, MIDI-in status and reconnect, network address, shutdown. Reached by the cog |
 
-`screens/home.py` is gone — `VoicePickerScreen` is what it became. Audio sits on
-the sets screen because the rigs screen needs its Back arrow and the step
-buttons, and that plus three actions does not fit across 800px.
+`screens/home.py` is gone — `VoicePickerScreen` is what it became. The settings
+**cog** owns the far-right header slot on every screen that has one, so it is
+always under the same thumb; every other action shifts left of it. It is absent
+from the modal screens — naming something, or picking from a catalogue — where
+that slot belongs to Done and a cog would discard what you had typed.
+
+**There is no audio device picker.** `scripts/start-jack.sh` already resolves the
+card by name (saved choice → HiFiBerry → first available → jackd's dummy
+backend), which is how this board has always chosen it: nothing was ever saved
+to `~/.synth-audio-device` and JACK opens `hw:sndrpihifiberry` on its own. The
+only other card is the carrier board's onboard USB codec, whose jack is sealed
+inside the enclosure — so the picker's sole power was to move audio somewhere
+worse. A hand-written `~/.synth-audio-device` is still honoured.
 
 **Entering a set you're not already in makes it active and loads its first
 usable rig**; re-entering the set you're in changes nothing, which is what makes

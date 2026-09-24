@@ -1,3 +1,5 @@
+import logging
+import os
 from collections.abc import Callable
 
 import pygame
@@ -5,6 +7,7 @@ import pygame
 from synth_ui.config import (
     BTN_NORMAL,
     DIVIDER,
+    IMAGES_DIR,
     PANEL_BG,
     STATUS_ERR,
     TEXT_ACTIVE,
@@ -14,9 +17,46 @@ from synth_ui.ui.event import UIEvent
 
 from .base import Component
 
+logger = logging.getLogger(__name__)
+
 _BACK_W = 48
 _ACTION_PAD = 12
 _ACTION_GAP = 8
+# The settings cog owns the far-right slot on every screen that has one, so it
+# is always in the same place under the same thumb. Everything else — New, Add,
+# Done — shifts left of it rather than sharing the position.
+_COG_W = 48
+
+
+_ICON_SIZE = 30
+_icon_cache: dict[int, pygame.Surface | None] = {}
+
+
+def settings_icon(size: int = _ICON_SIZE) -> pygame.Surface | None:
+    """The cog, from `assets/images/settings.png`.
+
+    An asset rather than drawn: pygame's bundled font has no U+2699 (it renders
+    as the missing-glyph box, identically to an emoji — checked, rather than
+    discovered on the panel), and hand-drawing a gear that reads correctly at
+    30px is a worse use of everyone's time than shipping one.
+
+    Loaded once per size and kept. None if the file can't be read, which leaves
+    an empty button rather than taking the instrument down over an icon.
+    """
+    if size not in _icon_cache:
+        try:
+            icon = pygame.image.load(os.path.join(IMAGES_DIR, "settings.png"))
+            try:
+                icon = icon.convert_alpha()
+            except pygame.error:
+                pass          # no display yet; the unconverted surface still blits
+            _icon_cache[size] = pygame.transform.smoothscale(icon, (size, size))
+        except Exception:
+            logger.warning("settings icon missing; cog will be blank")
+            _icon_cache[size] = None
+    return _icon_cache[size]
+
+
 # Step-through buttons sit immediately after the name, in the gap the header
 # has always had between the name and the right-hand actions. They belong
 # there: they change which name is shown.
@@ -37,6 +77,7 @@ class Header(Component):
         on_action3: Callable | None = None,
         on_prev: Callable | None = None,
         on_next: Callable | None = None,
+        on_settings: Callable | None = None,
     ):
         super().__init__(rect)
         self.font = font
@@ -45,6 +86,10 @@ class Header(Component):
         self.on_back = on_back
         self.on_prev = on_prev
         self.on_next = on_next
+        # Absent on the modal screens — naming something, or picking from a
+        # catalogue. There the rightmost slot belongs to Done, and a cog in it
+        # would throw away what you had typed.
+        self.on_settings = on_settings
         # Actions render right-to-left in the order given (first = rightmost).
         self.actions: list[tuple[str, Callable]] = []
         if action_label and on_action:
@@ -77,9 +122,20 @@ class Header(Component):
             x = rect.x - 4
         return rects
 
+    def _cog_rect(self) -> pygame.Rect | None:
+        if not self.on_settings:
+            return None
+        return pygame.Rect(
+            self.rect.right - _ACTION_GAP - _COG_W,
+            self.rect.y + 10,
+            _COG_W,
+            self.rect.height - 20,
+        )
+
     def _action_rects(self) -> list[tuple[pygame.Rect, str, Callable]]:
         rects: list[tuple[pygame.Rect, str, Callable]] = []
-        x_right = self.rect.right - _ACTION_GAP
+        cog = self._cog_rect()
+        x_right = (cog.x - _ACTION_GAP) if cog else (self.rect.right - _ACTION_GAP)
         for label, cb in self.actions:
             w = self.font.render(label, True, TEXT_ACTIVE).get_width() + _ACTION_PAD * 2
             r = pygame.Rect(x_right - w, self.rect.y + 10, w, self.rect.height - 20)
@@ -104,6 +160,18 @@ class Header(Component):
             x += _BACK_W
 
         right_margin = 16
+        cog_rect = self._cog_rect()
+        if cog_rect is not None:
+            pygame.draw.rect(surface, BTN_NORMAL, cog_rect, border_radius=6)
+            icon = settings_icon()
+            if icon is not None:
+                surface.blit(
+                    icon,
+                    (
+                        cog_rect.centerx - icon.get_width() // 2,
+                        cog_rect.centery - icon.get_height() // 2,
+                    ),
+                )
         action_rects = self._action_rects()
         for r, label, _cb in action_rects:
             pygame.draw.rect(surface, BTN_NORMAL, r, border_radius=6)
@@ -130,6 +198,8 @@ class Header(Component):
         elif action_rects:
             # leftmost action is last in the list
             right_margin = self.rect.right - action_rects[-1][0].x + _ACTION_GAP
+        elif cog_rect is not None:
+            right_margin = self.rect.right - cog_rect.x + _ACTION_GAP
 
         name = self.name or "No voice selected"
         if self.loading:
@@ -157,6 +227,10 @@ class Header(Component):
                 if back_rect.collidepoint(event.pos):
                     self.on_back()
                     return True
+            cog_rect = self._cog_rect()
+            if cog_rect is not None and cog_rect.collidepoint(event.pos):
+                self.on_settings()
+                return True
             for r, cb in self._step_rects():
                 if r.collidepoint(event.pos):
                     cb()
