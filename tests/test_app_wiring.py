@@ -142,6 +142,35 @@ def test_params_screen_builds_for_a_loaded_effect():
     ui._params_screen.draw(pygame.Surface((800, 480)))
 
 
+def _tap_action(screen, label):
+    """Invoke a header action by its label, as a tap on it would."""
+    next(cb for text, cb in screen.header.actions if text == label)()
+
+
+def test_an_effect_can_be_removed_from_its_params_screen():
+    """Remove went missing when the chain replaced the effects list: the chain
+    said it lived on this screen, and nothing put it there."""
+    ui = _ui([Effect(10, "urn:rev")])
+    removed = []
+    ui._on_remove_effect = removed.append
+    ui._show_effects_screen = lambda: None
+    ui._show_effect_params_screen(10)
+
+    _tap_action(ui._params_screen, "Remove")
+    assert removed == []                      # the first tap only asks
+    _tap_action(ui._params_screen, "Really?")
+    assert removed == [10]
+
+
+def test_the_instrument_screen_has_no_remove():
+    """A rig always has an instrument; it can be changed, not removed."""
+    from synth_ui.clients.rig import Rig
+
+    ui = _rig_ui(Rig("Vox Pad", "Calf Wavetable"))
+    ui._show_voice_params_screen()
+    assert "Remove" not in [label for label, _cb in ui._params_screen.header.actions]
+
+
 def test_params_screen_ignores_an_instance_that_is_gone():
     """Removing an effect while its params screen is opening must not raise."""
     ui = _ui([Effect(10, "urn:rev")])
@@ -283,7 +312,7 @@ def test_editing_a_control_reaches_the_live_instrument():
 
     ui = _rig_ui(Rig("Vox Pad", "Calf Wavetable"))
     ui._show_voice_params_screen()
-    ui._params_screen.sliders.sliders[0].on_change(0.25)
+    ui._params_screen.controls.widgets[0].on_change(0.25)
     assert ui._engine.voice_writes == [("cutoff", "0.25")]
 
 

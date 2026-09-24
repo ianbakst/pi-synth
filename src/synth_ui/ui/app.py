@@ -769,6 +769,7 @@ class SynthUI:
             ),
             on_back=self._show_effects_screen,
             on_reset=lambda: self._reset_effect_params(instance),
+            on_remove=lambda: self._remove_from_params(instance),
             on_settings=self._show_settings_screen,
         )
         self.screen = self._params_screen
@@ -824,6 +825,12 @@ class SynthUI:
             baseline = voice.params.get(port.symbol, port.default)
             self._engine.set_voice_param(port.symbol, str(baseline))
         self._show_voice_params_screen()
+
+    def _remove_from_params(self, instance: int) -> None:
+        """Back to the chain first, so the removal plays out where it can be
+        seen — the effect's own screen is about to describe nothing."""
+        self._show_effects_screen()
+        self._on_remove_effect(instance)
 
     def _on_remove_effect(self, instance: int) -> None:
         if self._effects_screen is None:

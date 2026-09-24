@@ -1,7 +1,7 @@
 """Tests for effect parameter discovery and the value formatting around it."""
 
+from synth_ui.clients.controls import control_for
 from synth_ui.clients.lv2 import ControlPort, parse_control_ports
-from synth_ui.ui.screens.params import format_value
 
 # Trimmed from real `lv2info` output: two usable controls, one meter that isn't.
 # Indented with spaces here; lv2info itself uses tabs, which the parser doesn't
@@ -121,34 +121,34 @@ class TestClamp:
 class TestFormatValue:
     def test_toggle_reads_as_on_off(self):
         port = ControlPort("x", "X", 0.0, 1.0, 0.0, toggled=True)
-        assert format_value(port)(1.0) == "on"
-        assert format_value(port)(0.0) == "off"
+        assert control_for(port).format(1.0) == "on"
+        assert control_for(port).format(0.0) == "off"
 
     def test_integer_drops_the_decimal(self):
         port = ControlPort("x", "X", 0.0, 8.0, 1.0, integer=True)
-        assert format_value(port)(4.0) == "4"
+        assert control_for(port).format(4.0) == "4"
 
     def test_narrow_range_gets_more_precision(self):
         """0.1 steps are meaningless on a 0..1 control."""
         port = ControlPort("x", "X", 0.0, 1.0, 0.5)
-        assert format_value(port)(0.25) == "0.25"
+        assert control_for(port).format(0.25) == "0.25"
 
     def test_wide_range_gets_one_decimal(self):
         port = ControlPort("x", "X", 0.0, 64.0, 1.0)
-        assert format_value(port)(12.34) == "12.3"
+        assert control_for(port).format(12.34) == "12.3"
 
     def test_an_enumeration_reads_out_its_setting(self):
         # "Blah" is choosable by ear; 5 is not.
         port = ControlPort("o1wave", "Osc1 Wave", 0.0, 28.0, 0.0, integer=True,
                            scale_points={0.0: "Shiny1", 5.0: "Blah"})
-        assert format_value(port)(5.0) == "Blah"
-        assert format_value(port)(5.4) == "Blah"      # mid-drag, between detents
+        assert control_for(port).format(5.0) == "Blah"
+        assert control_for(port).format(5.4) == "Blah"      # mid-drag, between detents
 
     def test_an_enumeration_falls_back_to_the_number(self):
         """A plugin needn't label every value in its range."""
         port = ControlPort("mode", "Mode", 0.0, 9.0, 0.0, integer=True,
                            scale_points={0.0: "Off"})
-        assert format_value(port)(7.0) == "7"
+        assert control_for(port).format(7.0) == "7"
 
 
 class TestWhitespace:

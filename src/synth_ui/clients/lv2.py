@@ -161,6 +161,12 @@ class ControlPort:
     default: float
     toggled: bool = False
     integer: bool = False
+    # The plugin says only its scale points are valid values, not the whole
+    # range between them.
+    enumeration: bool = False
+    # Equal ratios, not equal steps: frequencies, Q, times. A 10..20000 Hz
+    # control drawn linearly puts the whole bass range in its first 1%.
+    logarithmic: bool = False
     # value -> label, for ports that enumerate their settings (a filter's mode,
     # an oscillator's wavetable). Without them the control reads "Osc1 Wave 5",
     # which is not something anyone can choose a sound by.
@@ -236,6 +242,10 @@ def parse_control_ports(info: str) -> list[ControlPort]:
                 # lower-case, not as the capitalised words the summary lines use.
                 toggled="#toggled" in block.lower(),
                 integer="#integer" in block.lower(),
+                enumeration="#enumeration" in block.lower(),
+                # port-props#logarithmic, which lv2info does print — unlike
+                # units, which it leaves out.
+                logarithmic="#logarithmic" in block.lower(),
                 hidden=any(h in symbol.group(1).lower() for h in _HIDDEN_SUFFIXES),
                 scale_points={
                     float(value): label
