@@ -13,6 +13,7 @@ from synth_ui.clients.effects_catalog import (
     annotate_effects,
     read_effects_manifest,
 )
+from synth_ui.clients.eq import eq_layout_for
 from synth_ui.clients.midi_control import MidiControlListener
 from synth_ui.clients.network import (
     enable_wifi,
@@ -758,9 +759,10 @@ class SynthUI:
         )
         # lv2info is a subprocess; reading it on the UI thread would stall the
         # frame loop for the length of a plugin scan.
+        ports = self._engine.effect_controls(effect.uri)
         self._params_screen = ParamsScreen(
             name=name,
-            ports=self._engine.effect_controls(effect.uri),
+            ports=ports,
             values=dict(effect.params),
             on_change=(
                 lambda symbol, value: self._engine.set_effect_param(
@@ -771,6 +773,7 @@ class SynthUI:
             on_reset=lambda: self._reset_effect_params(instance),
             on_remove=lambda: self._remove_from_params(instance),
             on_settings=self._show_settings_screen,
+            eq=eq_layout_for(effect.uri, {p.symbol for p in ports if not p.hidden}),
         )
         self.screen = self._params_screen
 

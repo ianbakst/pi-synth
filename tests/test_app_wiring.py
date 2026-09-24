@@ -171,6 +171,19 @@ def test_the_instrument_screen_has_no_remove():
     assert "Remove" not in [label for label, _cb in ui._params_screen.header.actions]
 
 
+def test_an_eq_effect_opens_on_its_graph():
+    from tests.test_eq import FIL4, _ports
+
+    ui = _ui([Effect(10, FIL4), Effect(11, "urn:rev")])
+    ui._engine.effect_controls = lambda uri: _ports(FIL4) if uri == FIL4 else []
+    ui._show_effect_params_screen(10)
+    assert ui._params_screen.controls.on_eq_page
+    ui._params_screen.draw(pygame.Surface((800, 480)))
+
+    ui._show_effect_params_screen(11)
+    assert ui._params_screen.controls.eq_page is None
+
+
 def test_params_screen_ignores_an_instance_that_is_gone():
     """Removing an effect while its params screen is opening must not raise."""
     ui = _ui([Effect(10, "urn:rev")])

@@ -16,6 +16,7 @@ from collections.abc import Callable
 import pygame
 
 from synth_ui.clients.controls import controls_for
+from synth_ui.clients.eq import EqLayout
 from synth_ui.clients.lv2 import ControlPort
 from synth_ui.config import (
     BG,
@@ -30,6 +31,7 @@ from synth_ui.config import (
 )
 from synth_ui.ui.components.base import Component
 from synth_ui.ui.components.controls import ControlWidget, widget_for
+from synth_ui.ui.components.eq_graph import EqPage
 from synth_ui.ui.components.header import Header
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
@@ -49,6 +51,9 @@ class ControlPanel(Component):
 
     Widgets live in absolute screen coordinates. Only the current page's are
     positioned, drawn and hit-tested; the rest wait where they are.
+
+    Given an EQ layout, the first page is the EQ's curve instead, and the grid
+    holds only what isn't part of a band — input and output gain, say.
     """
 
     def __init__(
@@ -58,6 +63,7 @@ class ControlPanel(Component):
         values: dict[str, float],
         font: pygame.font.Font,
         on_change: Callable[[str, float], None],
+        eq: EqLayout | None = None,
     ):
         super().__init__(rect)
         self.page = 0
@@ -65,34 +71,73 @@ class ControlPanel(Component):
         # The widget a touch landed on keeps every event until the finger
         # lifts, wherever it moves — a knob dragged upward leaves its own cell
         # almost immediately.
-        self._captured: ControlWidget | None = None
+        self._captured: Component | None = None
         # Page buttons act on release, and only if released on the same one.
         self._pressed: pygame.Rect | None = None
 
+        controls = controls_for(ports)
+        if eq is not None:
+            controls = [c for c in controls if c.symbol not in eq.hidden]
+        # Every value on the screen, complete with defaults. The EQ page's
+        # graph and knobs both read and write it, so each follows the other.
+        self.values = {c.symbol: values.get(c.symbol, c.default) for c in controls}
+        self._on_change = on_change
+
         cell_w = (rect.width - PAGE_STRIP_W) // COLUMNS
+        self.eq_page: EqPage | None = None
+        if eq is not None:
+            self.eq_page = EqPage(
+                rect=pygame.Rect(
+                    rect.x, rect.y, rect.width - PAGE_STRIP_W, rect.height
+                ),
+                layout=eq,
+                values=self.values,
+                controls={c.symbol: c for c in controls},
+                font=font,
+                on_change=on_change,
+                cell_w=cell_w,
+                row_h=ROW_H,
+            )
+            controls = [c for c in controls if c.symbol not in eq.band_symbols]
+
         self.widgets: list[ControlWidget] = [
             widget_for(
                 rect=pygame.Rect(0, 0, cell_w, ROW_H),
                 control=control,
-                value=values.get(control.symbol, control.default),
-                on_change=(lambda v, s=control.symbol: on_change(s, v)),
+                value=self.values[control.symbol],
+                on_change=(lambda v, s=control.symbol: self._changed(s, v)),
                 font=font,
             )
-            for control in controls_for(ports)
+            for control in controls
         ]
         self._layout()
+
+    def _changed(self, symbol: str, value: float) -> None:
+        self.values[symbol] = value
+        self._on_change(symbol, value)
 
     @property
     def per_page(self) -> int:
         return COLUMNS * max(1, self.rect.height // ROW_H)
 
     @property
+    def _eq_pages(self) -> int:
+        return 1 if self.eq_page is not None else 0
+
+    @property
     def pages(self) -> int:
-        return max(1, -(-len(self.widgets) // self.per_page))
+        grid = -(-len(self.widgets) // self.per_page)
+        return max(1, self._eq_pages + grid)
+
+    @property
+    def on_eq_page(self) -> bool:
+        return self.eq_page is not None and self.page == 0
 
     @property
     def visible(self) -> list[ControlWidget]:
-        first = self.page * self.per_page
+        if self.on_eq_page:
+            return []
+        first = (self.page - self._eq_pages) * self.per_page
         return self.widgets[first:first + self.per_page]
 
     @property
@@ -128,7 +173,7 @@ class ControlPanel(Component):
 
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.rect(surface, BG, self.rect)
-        if not self.widgets:
+        if not self.widgets and self.eq_page is None:
             # Not only effects any more: b_synth is a real case of an
             # *instrument* with no control ports at all — its drawbars,
             # percussion and Leslie are MIDI CC.
@@ -138,6 +183,8 @@ class ControlPanel(Component):
             surface.blit(text, (self.rect.x + 20, self.rect.y + 20))
             return
 
+        if self.on_eq_page:
+            self.eq_page.draw(surface)
         for widget in self.visible:
             widget.draw(surface)
         if self.pages > 1:
@@ -188,6 +235,9 @@ class ControlPanel(Component):
                     None,
                 )
                 return True
+            if self.on_eq_page and self.eq_page.handle_event(event):
+                self._captured = self.eq_page
+                return True
             for widget in self.visible:
                 if widget.rect.collidepoint(event.pos) and widget.handle_event(event):
                     self._captured = widget
@@ -225,6 +275,7 @@ class ParamsScreen(Screen):
         on_swap: Callable | None = None,
         on_remove: Callable | None = None,
         on_settings: Callable | None = None,
+        eq: EqLayout | None = None,
     ):
         font_large = pygame.font.Font(None, 36)
         font_small = pygame.font.Font(None, 22)
@@ -255,6 +306,7 @@ class ParamsScreen(Screen):
             values=values,
             font=font_small,
             on_change=on_change,
+            eq=eq,
         )
         self.components = (self.header, self.controls)
 

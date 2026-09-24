@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _CALF = "http://calf.sourceforge.net/plugins/"
 _MDA = "http://drobilla.net/plugins/mda/"
+_X42 = "http://gareus.org/oss/lv2/"
 
 
 @dataclass
@@ -76,6 +77,8 @@ DEFAULT_EFFECTS: list[EffectCatalogEntry] = [
 
     # --- tone and control ---
     EffectCatalogEntry("EQ 5-Band", _CALF + "Equalizer5Band", "EQ"),
+    EffectCatalogEntry("EQ 8-Band", _X42 + "fil4#stereo", "EQ",
+                       "x42 fil4: shelves, four peaks, high- and low-pass."),
     EffectCatalogEntry("Filter", _CALF + "Filter", "Filter",
                        "Sweepable; the wah half of a clav sound."),
     EffectCatalogEntry("Compressor", _CALF + "Compressor", "Dynamics",
