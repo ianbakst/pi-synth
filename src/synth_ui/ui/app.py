@@ -1,6 +1,10 @@
+import logging
 import os
+import queue
 import subprocess
 import threading
+import time
+from concurrent.futures import Future
 from dataclasses import replace
 
 import pygame
@@ -33,6 +37,8 @@ from synth_ui.config import (
     DEFAULT_BRIGHTNESS,
     DEFAULT_GAIN,
     DEFAULT_VOICE,
+    EDITOR_IDLE_S,
+    EDITOR_PORT,
     EFFECTS_MANIFEST,
     IS_PI,
     MIDI_NEXT_RIG_CC,
@@ -48,6 +54,8 @@ from synth_ui.config import (
     TRIMS_FILE,
     VOICES_MANIFEST,
 )
+from synth_ui.server.http import EditorServer
+from synth_ui.ui.editor import EditorController
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
 from synth_ui.ui.screens.effects import EffectsCatalogScreen, EffectsScreen
@@ -62,6 +70,8 @@ from synth_ui.ui.screens.voice_picker import VoicePickerScreen
 from synth_ui.ui.utils import load_voices, lv2_world
 
 SPLASH_DURATION_MS = 5000
+
+logger = logging.getLogger(__name__)
 
 
 def _load_state() -> tuple[str, str]:
@@ -256,6 +266,15 @@ class SynthUI:
         self._brightness = _load_brightness()
         if self._backlight.available:
             self._backlight.set_fraction(self._brightness)
+
+        # Work handed to the frame loop from other threads — the editor's
+        # requests. The UI thread is the only one that changes sets, rigs or
+        # screens; everything else asks it to.
+        self._commands: queue.SimpleQueue = queue.SimpleQueue()
+        self._ui_thread = threading.current_thread()
+        # The browser editor. Off at every boot, and never remembered as on.
+        self._editor = EditorController(self)
+        self._editor_server: EditorServer | None = None
 
         self.screen: Screen = SplashScreen()
         self._splash_start = pygame.time.get_ticks()
@@ -580,6 +599,16 @@ class SynthUI:
         if self._effects_screen is not None:
             rig.trim_db = self._effects_screen.trim_slider.value
             rig.fixed_velocity = self._effects_screen.fixed_velocity
+        self._persist_active_rig()
+
+    def _persist_active_rig(self) -> None:
+        """Write the live chain and instrument patch into the active rig, and
+        save. Level and fixed velocity are whatever the rig already holds —
+        the caller sets them, since the effects screen and the editor keep
+        them in different places."""
+        rig = self._rig_screen.active_rig
+        if rig is None:
+            return
         # Carry params and bypass, not just the URI. Saving the chain without
         # what was dialled into it is the same as not saving it.
         rig.effects = [
@@ -640,6 +669,8 @@ class SynthUI:
             interfaces=network_interfaces,
             wifi_enabled=wifi_enabled,
             on_set_wifi=_set_wifi,
+            editor_status=self._editor_status,
+            on_set_editor=self._set_editor,
             on_shutdown=_shutdown,
             on_restart=_restart,
             # Both None on a board with no backlight, which hides the slider
@@ -884,6 +915,115 @@ class SynthUI:
             case _:
                 return None
 
+    # ------------------------------------------------------------------
+    # Work from other threads
+    # ------------------------------------------------------------------
+
+    def run_on_ui(self, fn, timeout: float = 10.0):
+        """Run `fn` on the UI thread and return its result.
+
+        Called from the editor's request threads. They never touch the app's
+        state themselves: sets, rigs and screens have one writer, and it is
+        this loop.
+        """
+        if threading.current_thread() is self._ui_thread:
+            return fn()
+        future: Future = Future()
+        self._commands.put((fn, future))
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            # Not run yet: cancelling stops it running late, after its caller
+            # has already been told it failed.
+            future.cancel()
+            raise
+
+    def call_soon(self, fn) -> None:
+        """Queue `fn` for the UI thread without waiting — how a background
+        engine operation hands its result back."""
+        self._commands.put((fn, None))
+
+    def _drain_commands(self) -> None:
+        while True:
+            try:
+                fn, future = self._commands.get_nowait()
+            except queue.Empty:
+                return
+            if future is not None and not future.set_running_or_notify_cancel():
+                continue
+            try:
+                result = fn()
+            except BaseException as exc:  # handed to the waiting thread
+                if future is None:
+                    logger.exception("queued UI work failed")
+                else:
+                    future.set_exception(exc)
+            else:
+                if future is not None:
+                    future.set_result(result)
+
+    def _after_remote_edit(self, active_rig_changed: bool) -> None:
+        """Bring the touchscreen up to date after the editor changed something.
+
+        Lists are always re-rendered. The screens that show the active rig's
+        chain are rebuilt only if it was that rig that changed — they hold
+        their own copy of it, and one left stale would write the old values
+        back when you leave it.
+        """
+        self._home.refresh(self._sets.sets)
+        if self._active_set is not None:
+            self._rig_screen.set_rigs(
+                self._active_set.rigs, title=self._active_set.name
+            )
+        if not active_rig_changed:
+            return
+        if self._rig_screen.active_rig is None:
+            # Deleted from the browser. The chain screens describe nothing now.
+            if self.screen in (self._effects_screen, self._params_screen):
+                self._show_rigs()
+            return
+        if self.screen is self._effects_screen:
+            self._show_effects_screen()
+        elif self.screen is self._params_screen:
+            # Which control it was showing isn't worth tracking for the rare
+            # edit from both ends at once; back to the chain it came from.
+            self._show_effects_screen()
+
+    # ------------------------------------------------------------------
+    # The browser editor
+    # ------------------------------------------------------------------
+
+    def _editor_status(self) -> tuple[str, str] | None:
+        """(url, pin) while the editor is on, for the settings screen."""
+        # getattr: the settings screen asks this while it's built, and a
+        # SynthUI assembled piecemeal (as the wiring tests do) has no server.
+        server = getattr(self, "_editor_server", None)
+        if server is None or not server.running:
+            return None
+        return server.url, server.pin
+
+    def _set_editor(self, enabled: bool) -> bool:
+        if not enabled:
+            if self._editor_server is not None:
+                self._editor_server.stop()
+            self._editor_server = None
+            return True
+        if self._editor_server is not None and self._editor_server.running:
+            return True
+        server = EditorServer(self._editor, dispatch=self.run_on_ui, port=EDITOR_PORT)
+        if not server.start():
+            return False
+        self._editor_server = server
+        return True
+
+    def _check_editor_idle(self) -> None:
+        server = self._editor_server
+        if server is not None and server.idle_for(time.monotonic()) > EDITOR_IDLE_S:
+            logger.info("editor idle for %d min; switching it off", EDITOR_IDLE_S // 60)
+            self._set_editor(False)
+            if self.screen is self._settings_screen:
+                self._settings_screen.refresh()
+
     def run(self) -> None:
         clock = pygame.time.Clock()
         try:
@@ -896,6 +1036,9 @@ class SynthUI:
                     if event := self._to_ui_event(raw):
                         self.screen.handle_event(event)
 
+                self._drain_commands()
+                self._check_editor_idle()
+
                 if not self._splash_done:
                     elapsed = pygame.time.get_ticks() - self._splash_start
                     if elapsed >= SPLASH_DURATION_MS:
@@ -907,5 +1050,6 @@ class SynthUI:
                 pygame.display.flip()
                 clock.tick(30)
         finally:
+            self._set_editor(False)
             self._save_where_we_were()
             pygame.quit()

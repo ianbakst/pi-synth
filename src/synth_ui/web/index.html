@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Synth Editor</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <h1>Synth Editor</h1>
+    <span id="status" class="status">connecting…</span>
+    <span class="spacer"></span>
+    <button id="export" type="button">Export</button>
+    <label class="button">Import<input id="import" type="file" accept=".json,application/json" hidden></label>
+  </header>
+
+  <main id="app" hidden>
+    <section class="column" aria-labelledby="sets-title">
+      <h2 id="sets-title">Sets</h2>
+      <ul id="sets" class="list"></ul>
+      <form id="new-set" class="inline-form">
+        <input name="name" placeholder="New set" aria-label="New set name">
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <section class="column" aria-labelledby="rigs-title">
+      <h2 id="rigs-title">Rigs</h2>
+      <ul id="rigs" class="list"></ul>
+      <form id="new-rig" class="inline-form">
+        <select name="voice" aria-label="Instrument for a new rig"></select>
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <section class="column editor" id="editor" aria-label="Rig"></section>
+  </main>
+
+  <div id="login" class="overlay" hidden>
+    <form id="login-form" class="card">
+      <h2>Enter the PIN</h2>
+      <p>It's on the instrument's settings screen, next to Editor.</p>
+      <input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
+             autocomplete="off" aria-label="PIN" required>
+      <button type="submit">Open</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </div>
+
+  <script src="eq.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

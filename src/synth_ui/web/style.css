@@ -1,0 +1,279 @@
+/* Dark, like the instrument's own screen, so the two read as one thing. */
+:root {
+  --bg: #141419;
+  --panel: #1e1e26;
+  --raised: #2d2d37;
+  --line: #32323c;
+  --text: #f0f0f5;
+  --muted: #a0a0aa;
+  --faint: #69697a;
+  --accent: #3c82b4;
+  --accent-soft: rgba(60, 130, 180, 0.28);
+  --live: #50c878;
+  --danger: #c85050;
+  --radius: 8px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+button, .button, select, input {
+  font: inherit;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+button, .button { cursor: pointer; }
+button:hover, .button:hover { border-color: var(--line); background: #36364a; }
+button:focus-visible, select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.danger { color: #ffb4b4; }
+button.icon { padding: 4px 9px; min-width: 32px; }
+input[type="range"] { padding: 0; accent-color: var(--accent); }
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.bar h1 { font-size: 17px; margin: 0; }
+.spacer { flex: 1; }
+.status { color: var(--muted); font-size: 13px; }
+.status.error { color: var(--danger); }
+
+main {
+  display: grid;
+  grid-template-columns: 220px 260px minmax(0, 1fr);
+  gap: 1px;
+  background: var(--line);
+  min-height: calc(100vh - 53px);
+}
+.column { background: var(--bg); padding: 14px 16px; min-width: 0; }
+.column h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 2px 0 10px;
+}
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+}
+
+/* --- lists ---------------------------------------------------------------- */
+
+.list { list-style: none; margin: 0 0 12px; padding: 0; }
+.list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius);
+  padding: 4px 4px 4px 10px;
+  margin-bottom: 2px;
+}
+.list li.selected { background: var(--raised); }
+.list .name {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  padding: 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  text-align: left;
+}
+.list .sub { display: block; color: var(--muted); font-size: 12px; }
+.list .tools { display: none; gap: 2px; }
+.list li.selected .tools, .list li:hover .tools { display: flex; }
+.list .tools button { padding: 2px 5px; min-width: 22px; background: transparent; }
+.list .tools button:hover { background: var(--line); }
+
+.badge {
+  font-size: 11px;
+  border-radius: 10px;
+  padding: 1px 8px;
+  background: var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.live { background: rgba(80, 200, 120, 0.18); color: var(--live); }
+.badge.warn { background: rgba(200, 80, 80, 0.18); color: #ffb4b4; }
+
+.inline-form { display: flex; gap: 6px; }
+.inline-form input, .inline-form select { flex: 1; min-width: 0; }
+
+/* --- the rig ------------------------------------------------------------- */
+
+.editor .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.rig-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rig-head input.title {
+  font-size: 20px;
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 6px;
+  flex: 1;
+  min-width: 160px;
+}
+.rig-head input.title:hover, .rig-head input.title:focus { border-color: var(--line); }
+.explain { color: var(--muted); font-size: 13px; margin: 4px 0 14px 6px; }
+.banner {
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 18px;
+  margin-bottom: 18px;
+}
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field > span { color: var(--muted); font-size: 12px; }
+.field .row { display: flex; gap: 8px; align-items: center; }
+.field .row > :first-child { flex: 1; min-width: 0; }
+.field output { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.block {
+  background: var(--panel);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+}
+.block.bypassed .block-head .name { color: var(--faint); text-decoration: line-through; }
+.block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.block-head .name { font-weight: 600; flex: 1; min-width: 0; }
+.block-head .cat { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
+.block-head .chev { color: var(--muted); width: 16px; }
+.block-head button { background: transparent; }
+.block-head button:hover { background: var(--line); }
+.block-body { padding: 4px 12px 14px; border-top: 1px solid var(--line); }
+.block-body .loading { color: var(--muted); padding: 12px 0; }
+.add-effect { display: flex; gap: 8px; margin-top: 6px; }
+.add-effect select { flex: 1; min-width: 0; }
+
+/* --- controls ------------------------------------------------------------ */
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.ctl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 2px;
+  border-radius: 6px;
+  min-width: 0;
+}
+.ctl .label {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctl .value { font-size: 12px; font-variant-numeric: tabular-nums; }
+.knob { touch-action: none; cursor: ns-resize; user-select: none; }
+.knob svg { display: block; }
+.knob .track { stroke: var(--line); }
+.knob .fill { stroke: var(--accent); }
+.knob .dot { fill: #c8c8d2; }
+.knob.dragging .dot { fill: #fff; }
+
+.toggle {
+  width: 64px;
+  border-radius: 20px;
+  padding: 8px 0;
+  margin: 12px 0;
+}
+.toggle.on { background: var(--accent); }
+
+.choice { display: flex; flex-direction: column; gap: 3px; width: 100%; margin: 4px 0; }
+.choice button { padding: 4px 6px; font-size: 12px; }
+.choice button.on { background: var(--accent); }
+.ctl select { width: 100%; margin: 14px 0; font-size: 13px; padding: 5px; }
+.ctl.wide { grid-column: span 2; }
+
+/* --- EQ ------------------------------------------------------------------ */
+
+.eq svg { display: block; width: 100%; height: auto; touch-action: none; user-select: none; }
+.eq .plot { fill: var(--bg); }
+.eq .grid { stroke: var(--line); stroke-width: 1; }
+.eq .zero { stroke: var(--faint); stroke-width: 1; }
+.eq .axis { fill: var(--faint); font-size: 11px; }
+.eq .area { fill: var(--accent-soft); }
+.eq .curve { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+.eq .band-curve { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.eq .handle circle { fill: var(--raised); stroke: none; cursor: grab; }
+.eq .handle.on circle { fill: var(--accent); }
+.eq .handle.selected circle { stroke: #fff; stroke-width: 2; }
+.eq .handle text {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.eq .band-title { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* --- login --------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  z-index: 10;
+}
+.overlay[hidden] { display: none; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  width: min(340px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.card h2 { margin: 0; font-size: 18px; }
+.card p { margin: 0; color: var(--muted); font-size: 13px; }
+.card input { font-size: 28px; letter-spacing: 0.4em; text-align: center; }
+.error { color: var(--danger) !important; min-height: 1.2em; }

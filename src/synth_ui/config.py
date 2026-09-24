@@ -67,6 +67,14 @@ IMAGES_DIR = os.path.join(ASSETS_DIR, "images")
 # --- mod-host TCP connection ---
 MOD_HOST_PORT = 5555
 
+# --- Browser editor (synth_ui/server) ---
+# Off at every boot; switched on from the settings screen. Above 1024 so the UI
+# needs no privilege to bind it.
+EDITOR_PORT = 8080
+# It switches itself off after this long with no requests, so one left on after
+# a rehearsal isn't still on at the gig.
+EDITOR_IDLE_S = 30 * 60
+
 # --- Display ---
 SCREEN_W = 800
 SCREEN_H = 480

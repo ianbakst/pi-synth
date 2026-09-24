@@ -25,6 +25,7 @@ from synth_ui.clients.network import Interface
 from synth_ui.config import (
     BTN_NORMAL,
     DIVIDER,
+    EDITOR_PORT,
     HEADER_H,
     PANEL_BG,
     SCREEN_H,
@@ -147,6 +148,8 @@ class SettingsScreen(Screen):
         on_restart: Callable,
         on_brightness: Callable[[float], None] | None = None,
         initial_brightness: float | None = None,
+        editor_status: Callable[[], tuple[str, str] | None] | None = None,
+        on_set_editor: Callable[[bool], bool] | None = None,
     ):
         font_large = pygame.font.Font(None, 36)
         font_medium = pygame.font.Font(None, 28)
@@ -160,6 +163,10 @@ class SettingsScreen(Screen):
         # which of those is happening rather than look frozen.
         self._wifi_busy = False
         self._wifi_failed = False
+        # The browser editor: (url, pin) while it's on, None while off.
+        self._editor_status = editor_status
+        self._on_set_editor = on_set_editor
+        self._editor_failed = False
         self._on_reconnect = on_reconnect_midi
         self._on_shutdown = on_shutdown
         self._on_restart = on_restart
@@ -226,6 +233,36 @@ class SettingsScreen(Screen):
 
     def refresh(self) -> None:
         """Re-read what's connected: on open, on a timer, and after a button."""
+        self._refresh()
+        if self._on_set_editor is None:
+            return
+        # The editor lives with the network because that's what it is: a way
+        # in over WiFi. Its button sits left of WiFi's, and while it's on, the
+        # address and PIN head the section — they are what you came here for.
+        status = self._editor_status() if self._editor_status else None
+        self.network.buttons = [
+            *self.network.buttons,
+            ("Editor: On" if status else "Editor: Off", self._toggle_editor),
+        ]
+        if status is not None:
+            url, pin = status
+            self.network.lines = [
+                (f"Editor  {url}   PIN {pin}", STATUS_OK), *self.network.lines
+            ]
+        elif self._editor_failed:
+            self.network.lines = [
+                (f"Editor could not start — port {EDITOR_PORT} in use?", STATUS_ERR),
+                *self.network.lines,
+            ]
+
+    def _toggle_editor(self) -> None:
+        """No confirmation, like WiFi: it's undone by tapping again, and it is
+        off after every power cycle regardless."""
+        on = self._editor_status() is not None if self._editor_status else False
+        self._editor_failed = not self._on_set_editor(not on) and not on
+        self.refresh()
+
+    def _refresh(self) -> None:
         named = [d for d in (_describe(p) for p in self._midi_inputs()) if d]
         keyboards = [d for d in named if d != "DIN jack"]
         if keyboards:

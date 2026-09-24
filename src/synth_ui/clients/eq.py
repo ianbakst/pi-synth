@@ -87,6 +87,23 @@ class EqLayout:
     def band_symbols(self) -> set[str]:
         return {s for band in self.bands for s in band.symbols}
 
+    def to_dict(self) -> dict:
+        """What a browser needs to draw the same curve (see web/eq.js)."""
+        return {
+            "model": self.model,
+            "gain_unit": self.gain_unit,
+            "hidden": list(self.hidden),
+            "bands": [
+                {"kind": b.kind, "label": b.label, "enable": b.enable,
+                 "freq": b.freq, "gain": b.gain, "width": b.width}
+                for b in self.bands
+            ],
+            "sample_rate": SAMPLE_RATE,
+            "db_range": DB_RANGE,
+            "freq_lo": FREQ_LO,
+            "freq_hi": FREQ_HI,
+        }
+
     # --- units ------------------------------------------------------------
 
     def gain_db(self, band: Band, values: dict[str, float]) -> float:

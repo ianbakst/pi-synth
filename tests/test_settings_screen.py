@@ -363,3 +363,64 @@ def test_a_long_line_is_clipped_rather_than_drawn_under_the_buttons():
     assert font.size(fitted)[0] <= 300
     assert fitted.endswith("...")
     assert _fit("short", font, 300) == "short"
+
+
+def _editor_screen(start_ok=True):
+    """A settings screen with the browser editor wired to a fake."""
+    state = {"on": None, "calls": []}
+
+    def set_editor(enabled):
+        state["calls"].append(enabled)
+        if enabled and not start_ok:
+            return False
+        state["on"] = ("http://synth.local:8080", "4821") if enabled else None
+        return True
+
+    s = SettingsScreen(
+        on_back=lambda: None,
+        midi_inputs=lambda: [],
+        on_reconnect_midi=lambda: True,
+        interfaces=lambda: [Interface("wlan0", "UP", "192.168.1.148")],
+        wifi_enabled=lambda: True,
+        on_set_wifi=lambda on: True,
+        on_shutdown=lambda: None,
+        on_restart=lambda: None,
+        editor_status=lambda: state["on"],
+        on_set_editor=set_editor,
+    )
+    return s, state
+
+
+def test_the_editor_is_off_until_switched_on():
+    s, _ = _editor_screen()
+    assert "Editor: Off" in labels(s.network)
+    assert "Editor" not in text(s.network)
+
+
+def test_switching_the_editor_on_shows_where_and_the_pin():
+    """They're what you came here for, so they head the section."""
+    s, state = _editor_screen()
+    press(s.network, "Editor")
+    assert state["calls"] == [True]
+    assert "Editor: On" in labels(s.network)
+    assert s.network.lines[0][0].startswith("Editor  http://synth.local:8080")
+    assert "PIN 4821" in s.network.lines[0][0]
+
+
+def test_and_off_again():
+    s, state = _editor_screen()
+    press(s.network, "Editor")
+    press(s.network, "Editor")
+    assert state["calls"] == [True, False]
+    assert "PIN" not in text(s.network)
+
+
+def test_an_editor_that_could_not_start_says_so():
+    s, _ = _editor_screen(start_ok=False)
+    press(s.network, "Editor")
+    assert "could not start" in text(s.network)
+    assert "Editor: Off" in labels(s.network)
+
+
+def test_without_an_editor_there_is_no_button():
+    assert not any("Editor" in label for label in labels(screen().network))
