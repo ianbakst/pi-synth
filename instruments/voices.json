@@ -65,8 +65,9 @@
   {
     "name": "Salamander Grand",
     "engine": "sfizz",
-    "path": "/home/synth/instruments/salamander/SalamanderGrandPianoV3_48khz24bit/SalamanderGrandPianoV3.sfz",
+    "path": "/home/synth/instruments/salamander/SalamanderGrandPianoV3_48khz24bit/SalamanderGrandPianoV3-pisynth.sfz",
     "category": "Piano",
-    "resident": false
+    "resident": false,
+    "params": { "num_voices": 64 }
   }
 ]

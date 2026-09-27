@@ -5,6 +5,7 @@
 #     WorkingDirectory=/home/synth/synth/src)
 #   - create the soundfont/instrument dirs and a default.sf2
 #   - install the engine-switching sudoers rule
+#   - build mod-host's memory-locking shim (scripts/mlockall_preload.c)
 #
 # Only runtime dependency is pygame, provided by apt (python3-pygame) in
 # 00-base-packages — no venv/pip needed.
@@ -45,6 +46,11 @@ if [ ! -e /home/synth/soundfonts/default.sf2 ] \
 	&& [ -f /usr/share/sounds/sf2/FluidR3_GM.sf2 ]; then
 	ln -sf /usr/share/sounds/sf2/FluidR3_GM.sf2 /home/synth/soundfonts/default.sf2
 fi
+
+# mod-host's memory-locking shim, loaded by mod-host.service via LD_PRELOAD.
+# Built here rather than in 02-audio-stack because its source is in the app repo.
+gcc -O2 -shared -fPIC -o /usr/local/lib/libmlockall.so \
+	/home/synth/synth/scripts/mlockall_preload.c
 
 # Everything under /home/synth belongs to the synth user.
 chown -R synth:synth /home/synth

@@ -10,7 +10,14 @@ import tarfile
 
 import pytest
 
-from synth_ui.tools.install_library import LIBRARIES, _safe_members, install, main
+from synth_ui.tools.install_library import (
+    LIBRARIES,
+    PatchError,
+    _safe_members,
+    install,
+    main,
+    patch_salamander,
+)
 
 
 def _archive(tmp_path, entries):
@@ -85,6 +92,88 @@ class TestInstall:
         )
         assert install("salamander", str(tmp_path / "root")) == 0
         assert "Piano.sfz" in capsys.readouterr().out
+
+
+# The shipped mapping's group headers, verbatim, CRLF as shipped; one region
+# under each is enough.
+_SALAMANDER = "".join(
+    line + "\r\n"
+    for line in [
+        "//Notes",
+        "<group> amp_veltrack=73 ampeg_release=1",
+        "<region> sample=48khz24bit\\A0v1.wav lokey=21 hikey=22 lovel=1 hivel=26",
+        "<group> amp_veltrack=73 ampeg_release=5",
+        "<region> sample=48khz24bit\\F#6v1.wav lokey=89 hikey=91 lovel=1 hivel=26",
+        "<group> trigger=release volume=-4 amp_veltrack=94 rt_decay=6",
+        "<group> trigger=release volume=-4 amp_veltrack=94 rt_decay=7",
+        "<group> trigger=release volume=-4 amp_veltrack=90 rt_decay=8 ",
+        "<group> trigger=release volume=-4 amp_veltrack=90 rt_decay=9",
+        "<group> trigger=release amp_veltrack=95 rt_decay=7",
+        "<group> trigger=release amp_veltrack=90 rt_decay=7",
+        "<group> trigger=release amp_veltrack=96 rt_decay=2",
+        "<group> trigger=release pitch_keytrack=0 volume=-37 amp_veltrack=82 "
+        "rt_decay=2",
+        "<region> sample=48khz24bit\\rel1.wav lokey=21 hikey=21",
+        "<group> group=1 hikey=-1 lokey=-1 on_locc64=126 on_hicc64=127 off_by=2 "
+        "volume=-20",
+        "<group> group=2 hikey=-1 lokey=-1 on_locc64=0 on_hicc64=1 volume=-19",
+    ]
+)
+
+
+class TestSalamanderPatch:
+    def _groups(self, text):
+        return [line for line in text.split("\r\n") if line.startswith("<group>")]
+
+    def test_release_samples_get_their_own_capped_group(self):
+        """So the pedal-up burst steals from itself, not from held notes."""
+        release = [g for g in self._groups(patch_salamander(_SALAMANDER))
+                   if "trigger=release" in g]
+        assert len(release) == 8
+        assert all(g.endswith(" group=10 polyphony=32") for g in release)
+
+    def test_notes_get_note_polyphony(self):
+        notes = [g for g in self._groups(patch_salamander(_SALAMANDER))
+                 if "ampeg_release" in g]
+        assert notes == [
+            "<group> amp_veltrack=73 ampeg_release=1 note_polyphony=2",
+            "<group> amp_veltrack=73 ampeg_release=5 note_polyphony=2",
+        ]
+
+    def test_pedal_noise_groups_are_untouched(self):
+        """Their group numbers drive off_by; the release group must not
+        collide with them either."""
+        pedal = [g for g in self._groups(patch_salamander(_SALAMANDER))
+                 if "on_locc64" in g]
+        assert pedal == [g for g in self._groups(_SALAMANDER) if "on_locc64" in g]
+
+    def test_crlf_and_everything_else_survive(self):
+        out = patch_salamander(_SALAMANDER)
+        assert out.count("\r\n") == _SALAMANDER.count("\r\n")
+        assert "\n" not in out.replace("\r\n", "")
+        kept = [line for line in _SALAMANDER.split("\r\n")
+                if not line.startswith("<group>")]
+        assert [line for line in out.split("\r\n")
+                if not line.startswith("<group>")] == kept
+
+    def test_an_unexpected_file_is_refused_rather_than_half_patched(self):
+        with pytest.raises(PatchError):
+            patch_salamander("<group> trigger=release rt_decay=2\r\n")
+
+    def test_patch_writes_beside_the_original_and_leaves_it_alone(self, tmp_path):
+        patch = LIBRARIES["salamander"].patch
+        source = tmp_path / "salamander" / patch.source
+        source.parent.mkdir(parents=True)
+        source.write_bytes(_SALAMANDER.encode())
+        assert main(["salamander", "--patch", "--root", str(tmp_path)]) == 0
+        output = tmp_path / "salamander" / patch.output
+        assert output.parent == source.parent
+        assert output.read_bytes() == patch_salamander(_SALAMANDER).encode()
+        assert source.read_bytes() == _SALAMANDER.encode()
+
+    def test_patch_without_the_library_fails(self, tmp_path, capsys):
+        assert main(["salamander", "--patch", "--root", str(tmp_path)]) == 1
+        assert "patch failed" in capsys.readouterr().err
 
 
 class TestCLI:

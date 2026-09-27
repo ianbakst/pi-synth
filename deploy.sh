@@ -67,6 +67,15 @@ for unit in $PROJECT/systemd/*.service; do
 done
 [ "\$changed" = 1 ] && sudo systemctl daemon-reload || true
 
+# mod-host's memory-locking shim (scripts/mlockall_preload.c), built here so a
+# board flashed before it existed still gets it. Takes effect at mod-host's next
+# start, which this script doesn't force: that would cut the audio.
+gcc -O2 -shared -fPIC -o /tmp/libmlockall.so $PROJECT/scripts/mlockall_preload.c
+if ! cmp -s /tmp/libmlockall.so /usr/local/lib/libmlockall.so; then
+    sudo install -m 755 /tmp/libmlockall.so /usr/local/lib/libmlockall.so
+    echo "installed libmlockall.so (restart mod-host to apply)"
+fi
+
 mkdir -p ~/instruments
 if ! cmp -s "$PROJECT/instruments/voices.json" ~/instruments/voices.json; then
     cp "$PROJECT/instruments/voices.json" ~/instruments/voices.json

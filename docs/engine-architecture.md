@@ -96,13 +96,33 @@ this when Phase 3 effects routing actually starts.
   deadline-per-callback bound, not average-utilization bound; CPU headroom does
   not predict xrun-freedom when a core is shared or contended.
 - Same scenario, mod-host expanded to cores 2,3 (`taskset -c 2,3`, still no
-  `chrt`): ~65 xruns/min — real improvement, not a full fix (remaining stalls are
-  first-touch SD sample reads on this specific library/hardware, not scheduling).
+  `chrt`): ~65 xruns/min — real improvement, not a full fix. The remainder was
+  attributed at the time to first-touch SD sample reads; the CM5 measurements
+  below found two causes that sit *behind* those reads rather than being them.
 - Re-adding `chrt -f 80` to mod-host on 2,3 was tested and made things
   dramatically worse (~14,500 xruns/min, audible buzzing): it raised mod-host's
   decode threads above JACK's own callback-thread priority, causing them to
   preempt it — a priority inversion. Confirms mod-host should stay affinity-only,
   no `chrt`, matching the SIGKILL/RCU-stall wedge found earlier under heavy load.
+
+**Remaining sfizz xruns, CM5 (2026-09).** Test: a fixed two-minute pedalled
+Salamander passage (1,440 notes, seeded) sent through `Midi Through` with the
+DAC disconnected, counting JACK `Process error` cycles.
+- **Priority inversion, 92 xruns → 2-25.** sfizz raises its own disk-streaming
+  threads to `SCHED_RR 50` when `RLIMIT_RTPRIO` allows it. mod-host had
+  `LimitRTPRIO=80`, so it did, and every JACK client thread in mod-host runs at
+  `FIFO 5` (jackd's default `-P 10`, minus 5 — the `chrt -f 90` in
+  `start-jack.sh` lifts only jackd's idle main thread; its audio thread is at
+  10). Each note past its preload had a loader decoding the rest of the sample
+  ahead of every audio thread on cores 2-3. `LimitRTPRIO=10` makes sfizz's
+  request fail quietly.
+- **Page faults in real-time threads, 2-25 → 0.** Every remaining xrun lined up
+  with a page fault in a mod-host real-time thread (sampled per thread every
+  100 ms), and every such fault with an xrun. The loaders' constant mapping and
+  unmapping holds the mmap lock that even a minor fault needs. mod-host doesn't
+  `mlockall`, so `scripts/mlockall_preload.c` does it via `LD_PRELOAD`: five
+  runs, zero xruns, zero faults. Cost: mod-host's memory stays at its
+  high-water mark (~1.65 GB with Salamander, ~2 GB left free).
 
 Still to validate: `cyclictest -m -Sp99 -i200 -l100000` on cores 1,2,3 for the
 raw RT floor, and the xrun counter over a sustained voice-*switching* session

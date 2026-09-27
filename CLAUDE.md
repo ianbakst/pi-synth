@@ -125,6 +125,10 @@ Already configured; do not change without measuring:
 - Swap disabled
 - `@audio - rtprio 99` and `@audio - memlock unlimited` in limits.conf;
   `synth` is in the `audio` group
+- mod-host: `LimitRTPRIO=10`, so plugins can't raise their own threads above
+  its audio threads (sfizz tries), and all its memory locked through an
+  `LD_PRELOAD` shim (`scripts/mlockall_preload.c`). Each removed a class of
+  xruns — see docs/engine-architecture.md
 - Unnecessary services disabled. **Exception:** avahi-daemon stays enabled, so
   the board is reachable as `<hostname>.local` instead of by IP. It does no
   hardware polling and never touches the isolated cores.

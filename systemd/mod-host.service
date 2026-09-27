@@ -47,7 +47,23 @@ Environment=LV2_PATH=/usr/lib/lv2:/usr/local/lib/lv2
 # expose audio rendering to exactly what the isolation exists to prevent (and
 # risks starving the same core SSH/D-Bus depend on).
 ExecStart=/usr/bin/taskset -c 2,3 /usr/local/bin/mod-host -n -p 5555
-LimitRTPRIO=80
+# Just enough for JACK's client threads, which libjack runs at jackd's -P (10)
+# minus 5 = FIFO 5 — and deliberately not enough for anything else. sfizz raises
+# its own disk-streaming threads to SCHED_RR 50 (FilePool::
+# raiseCurrentThreadPriority) whenever the limit allows it; at 80 it did, and
+# those threads — reading and decoding the rest of a sample from the SD card on
+# every note past its preload — preempted every audio thread on cores 2-3. Same
+# inversion as the chrt experiment above, arrived at from the plugin's side.
+# Capped here, sfizz's request is refused (it carries on without a word) and the
+# loaders run in the gaps between cycles. Measured on the CM5 with a fixed
+# 2-minute pedalled Salamander passage: 92 xrun cycles at 80, 2-25 at 10.
+LimitRTPRIO=10
+# The rest of those xruns were page faults in real-time threads, waiting on
+# sfizz's loaders for the mmap lock; locking all memory took the same passage to
+# zero across five runs. See scripts/mlockall_preload.c, including what it costs
+# in RAM. If the library is missing, ld.so warns and mod-host runs unlocked.
+Environment=LD_PRELOAD=/usr/local/lib/libmlockall.so
+# Required by the mlockall above: capped, MCL_FUTURE makes allocations fail.
 LimitMEMLOCK=infinity
 Restart=on-failure
 RestartSec=1
