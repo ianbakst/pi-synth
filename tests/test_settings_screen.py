@@ -424,3 +424,82 @@ def test_an_editor_that_could_not_start_says_so():
 
 def test_without_an_editor_there_is_no_button():
     assert not any("Editor" in label for label in labels(screen().network))
+
+
+# --- backup ---
+
+def backup_screen(backup=None, drive=True, restored=None):
+    """A settings screen whose USB work runs inline, so tests needn't wait."""
+    from synth_ui.clients.usb_backup import Backup
+
+    found = Backup("/media/synth/sda1/synth-sets-x.json", [{}, {}]) \
+        if backup is None else backup
+    calls = restored if restored is not None else []
+    s = SettingsScreen(
+        on_back=lambda: None, midi_inputs=lambda: [], on_reconnect_midi=lambda: True,
+        interfaces=lambda: [], wifi_enabled=lambda: True, on_set_wifi=lambda on: True,
+        on_shutdown=lambda: None, on_restart=lambda: None,
+        on_backup=lambda done: done(True, "Saved 2 sets"),
+        find_backup=lambda: (drive, found or None),
+        on_restore=lambda b: calls.append(b) or "Added 2 sets.",
+    )
+    return s
+
+
+@pytest.fixture
+def inline_threads(monkeypatch):
+    import threading
+
+    class Inline:
+        def __init__(self, target, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(threading, "Thread", Inline)
+
+
+def test_no_backup_section_without_its_callbacks():
+    assert screen().backup is None
+
+
+def test_back_up_reports_and_says_the_stick_can_be_pulled():
+    s = backup_screen()
+    press(s.backup, "Back up")
+    assert "Saved 2 sets" in text(s.backup)
+    assert "Safe to remove" in text(s.backup)
+
+
+def test_restore_asks_first_and_names_what_it_will_add(inline_threads):
+    restored = []
+    s = backup_screen(restored=restored)
+    press(s.backup, "Restore")
+    assert restored == []
+    assert "Add 2 sets" in text(s.backup) and "synth-sets-x.json" in text(s.backup)
+    press(s.backup, "Really?")
+    assert len(restored) == 1
+    assert "Added 2 sets." in text(s.backup)
+    assert "Restore" in labels(s.backup)
+
+
+def test_restore_without_a_stick_says_so(inline_threads):
+    s = backup_screen(drive=False, backup=False)
+    press(s.backup, "Restore")
+    assert "No USB stick" in text(s.backup)
+    assert "Really?" not in labels(s.backup)
+
+
+def test_restore_with_no_backup_on_the_stick_says_so(inline_threads):
+    s = backup_screen(backup=False)
+    press(s.backup, "Restore")
+    assert "No synth-sets backup" in text(s.backup)
+
+
+def test_backing_up_cancels_an_armed_restore(inline_threads):
+    restored = []
+    s = backup_screen(restored=restored)
+    press(s.backup, "Restore")
+    press(s.backup, "Back up")
+    press(s.backup, "Restore")      # arms again rather than restoring
+    assert restored == []

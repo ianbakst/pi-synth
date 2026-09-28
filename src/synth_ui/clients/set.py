@@ -25,6 +25,14 @@ Both sets and rigs carry a uuid, and their names are metadata. Two songs both
 wanting a rig called "Rhodes" is normal, and renaming one must not turn it into
 a different rig. `~/.synth-state` points at the active set and rig by id for the
 same reason: reordering or renaming must not lose your place.
+
+## Surviving a bad file
+
+The store is the instrument, and nothing else on the board can rebuild it. So
+every save first keeps the previous version as `.1` (shifting `.1` to `.2`, and
+so on), at most once every few minutes so a slider drag doesn't cycle every copy
+out in a second. A store that won't parse is set aside as `.corrupt-<time>`,
+never written over, and the newest copy that does parse is loaded instead.
 """
 
 from __future__ import annotations
@@ -32,12 +40,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 
 from synth_ui.clients.rig import Rig, read_rigs
+from synth_ui.clients.storage import write_atomic
 
 logger = logging.getLogger(__name__)
+
+# How many earlier versions of the store to keep, and how far apart. Three,
+# five minutes apart, means a mistake noticed within a quarter of an hour can be
+# undone — and a file damaged on disk has three chances of an intact copy.
+BACKUPS = 3
+BACKUP_INTERVAL_S = 300.0
 
 
 def new_id() -> str:
@@ -146,21 +162,87 @@ class SetLibrary:
     def __init__(self, path: str, sets: list[SongSet] | None = None):
         self.path = path
         self.sets: list[SongSet] = list(sets or [])
+        # Set when the store had to be recovered: what happened, in words the
+        # player can act on. The UI shows it once; nothing else reads it.
+        self.recovery: str | None = None
+        self._read_only = False
 
     @classmethod
     def load(cls, path: str, legacy_rigs_path: str = "") -> SetLibrary:
-        """The store, migrating the pre-sets rig file if that's all there is."""
-        sets = read_sets(path)
-        if not sets and legacy_rigs_path:
-            sets = _migrate_rigs(legacy_rigs_path)
+        """The store; failing that, its newest intact backup; failing that, the
+        pre-sets rig file — but only on a board that has never had a store.
+
+        A store that exists but won't parse is not "no sets". Treating it as
+        empty is how it used to get overwritten: bootstrap would find nothing
+        and save a fresh "Set 1" straight over the damaged original.
+        """
+        if not os.path.exists(path):
+            sets = _migrate_rigs(legacy_rigs_path) if legacy_rigs_path else []
+            library = cls(path, sets)
             if sets:
-                library = cls(path, sets)
                 library.save()
-                return library
-        return cls(path, sets)
+            return library
+        try:
+            return cls(path, _parse_sets(path))
+        except Exception:
+            logger.exception("sets store %s is unreadable", path)
+        return cls._recover(path)
+
+    @classmethod
+    def _recover(cls, path: str) -> SetLibrary:
+        kept = _set_aside(path)
+        library = cls(path)
+        for backup in backup_paths(path):
+            try:
+                library.sets = _parse_sets(backup)
+            except Exception:
+                logger.warning("backup %s is unreadable too", backup)
+                continue
+            saved = time.strftime("%H:%M on %d %b", time.localtime(
+                os.path.getmtime(backup)))
+            logger.warning("recovered sets from %s", backup)
+            library.recovery = f"Sets file was damaged. Restored the copy from {saved}."
+            library.save()
+            return library
+        if kept is None:
+            # Still sitting at `path`: anything saved now would overwrite it.
+            library._read_only = True
+        library.recovery = (
+            "Sets file was damaged and no backup could be read. "
+            f"Kept as {os.path.basename(kept)}." if kept else
+            "Sets file was damaged and could not be moved. Changes won't be saved."
+        )
+        return library
 
     def save(self) -> bool:
+        if self._read_only:
+            return False
         return write_sets(self.path, self.sets)
+
+    def import_sets(self, data) -> list[SongSet]:
+        """Add the sets in an export (the store's own format), alongside the
+        ones already here, and save. Raises ValueError for anything else.
+
+        Added, never replacing: a replaced store would take the active rig out
+        from under what's playing. Every set and rig gets a fresh id so an
+        export can be imported twice, or into the board it came from.
+        """
+        if not isinstance(data, list):
+            raise ValueError("expected a list of sets")
+        added = []
+        try:
+            for entry in data:
+                song_set = SongSet.from_dict(entry)
+                song_set.id = new_id()
+                for rig in song_set.rigs:
+                    rig.id = new_id()
+                song_set.name = self.unique_name(song_set.name)
+                added.append(song_set)
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValueError(f"not a sets export: {exc}") from exc
+        self.sets.extend(added)
+        self.save()
+        return added
 
     def get(self, set_id: str) -> SongSet | None:
         return next((s for s in self.sets if s.id == set_id), None)
@@ -239,24 +321,80 @@ def read_sets(path: str) -> list[SongSet]:
     if not os.path.exists(path):
         return []
     try:
-        with open(path) as f:
-            return [SongSet.from_dict(entry) for entry in json.load(f)]
+        return _parse_sets(path)
     except Exception:
         logger.exception("could not read sets from %s", path)
         return []
 
 
-def write_sets(path: str, sets: list[SongSet]) -> bool:
-    """Persist the store via temp file + rename, so a crash or a pulled power
-    cable can't leave a half-written one behind — this is the user's own work,
-    unlike the catalog, and isn't reproducible from the image."""
-    tmp = f"{path}.tmp"
+def _parse_sets(path: str) -> list[SongSet]:
+    """The store's sets, or an exception: for callers that need to tell a
+    damaged file from an empty one."""
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError(f"expected a list of sets, got {type(data).__name__}")
+    return [SongSet.from_dict(entry) for entry in data]
+
+
+def write_sets(
+    path: str,
+    sets: list[SongSet],
+    backups: int = BACKUPS,
+    backup_interval: float = BACKUP_INTERVAL_S,
+) -> bool:
+    """Persist the store atomically and durably (see storage.py) — this is the
+    user's own work, unlike the catalog, and isn't reproducible from the image.
+    Keeps the version it replaces as a backup when the last one is old enough.
+    """
     try:
-        with open(tmp, "w") as f:
-            json.dump([s.to_dict() for s in sets], f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
+        if backups > 0:
+            _rotate_backups(path, backups, backup_interval)
+        write_atomic(
+            path, json.dumps([s.to_dict() for s in sets], indent=2) + "\n"
+        )
         return True
     except OSError:
         logger.exception("could not write sets to %s", path)
         return False
+
+
+def backup_paths(path: str, backups: int = BACKUPS) -> list[str]:
+    """Existing backups of the store, newest first."""
+    return [p for p in (f"{path}.{n}" for n in range(1, backups + 1))
+            if os.path.exists(p)]
+
+
+def _rotate_backups(path: str, backups: int, interval: float) -> None:
+    """Shift `.1`..`.n-1` up one and copy the current store to `.1`.
+
+    Skipped while `.1` is younger than `interval`, and skipped for a store that
+    doesn't parse — a bad file must never push a good copy off the end.
+    """
+    newest = f"{path}.1"
+    if not os.path.exists(path):
+        return
+    if os.path.exists(newest) and time.time() - os.path.getmtime(newest) < interval:
+        return
+    try:
+        _parse_sets(path)
+    except Exception:
+        return
+    for n in range(backups - 1, 0, -1):
+        if os.path.exists(f"{path}.{n}"):
+            os.replace(f"{path}.{n}", f"{path}.{n + 1}")
+    with open(path, "rb") as f:
+        write_atomic(newest, f.read())
+
+
+def _set_aside(path: str) -> str | None:
+    """Move a damaged store out of the way, keeping it: it may still be
+    repairable by hand, and whatever is saved next must not land on top of it.
+    Returns where it went, or None if it couldn't be moved."""
+    kept = f"{path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        os.replace(path, kept)
+        return kept
+    except OSError:
+        logger.exception("could not set aside damaged store %s", path)
+        return None

@@ -423,28 +423,13 @@ class EditorController:
     # ------------------------------------------------------------------
 
     def import_sets(self, data) -> dict:
-        """Add the sets in an export, alongside the ones already here.
-
-        Added, never replacing: a replaced store would take the active rig out
-        from under what's playing. Every set and rig gets a fresh id so an
-        export can be imported twice, or into the board it came from.
-        """
-        if not isinstance(data, list):
-            raise EditorError("expected a list of sets")
-        library = self._app._sets
-        added = []
+        """Add the sets in an export, alongside the ones already here. See
+        SetLibrary.import_sets — the USB restore goes through it too."""
         try:
-            for entry in data:
-                song_set = SongSet.from_dict(entry)
-                song_set.id = new_id()
-                for rig in song_set.rigs:
-                    rig.id = new_id()
-                song_set.name = library.unique_name(song_set.name)
-                added.append(song_set)
-        except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            raise EditorError(f"not a sets export: {exc}") from exc
-        library.sets.extend(added)
-        self._saved()
+            added = self._app._sets.import_sets(data)
+        except ValueError as exc:
+            raise EditorError(str(exc)) from exc
+        self._app._after_remote_edit(False)
         return {"added": len(added)}
 
     # ------------------------------------------------------------------

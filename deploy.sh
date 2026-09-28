@@ -67,6 +67,20 @@ for unit in $PROJECT/systemd/*.service; do
 done
 [ "\$changed" = 1 ] && sudo systemctl daemon-reload || true
 
+# udev rules (the USB automount), for the same reason as the units. A reload is
+# enough for the next stick plugged in; one already in stays unmounted until
+# it's replugged.
+changed=0
+for rule in $PROJECT/udev/*.rules; do
+    name=\$(basename "\$rule")
+    if ! cmp -s "\$rule" "/etc/udev/rules.d/\$name"; then
+        sudo install -m 644 "\$rule" "/etc/udev/rules.d/\$name"
+        echo "installed \$name"
+        changed=1
+    fi
+done
+[ "\$changed" = 1 ] && sudo udevadm control --reload || true
+
 # mod-host's memory-locking shim (scripts/mlockall_preload.c), built here so a
 # board flashed before it existed still gets it. Takes effect at mod-host's next
 # start, which this script doesn't force: that would cut the audio.

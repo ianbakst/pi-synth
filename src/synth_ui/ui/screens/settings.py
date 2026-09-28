@@ -22,6 +22,7 @@ from collections.abc import Callable
 import pygame
 
 from synth_ui.clients.network import Interface
+from synth_ui.clients.usb_backup import Backup
 from synth_ui.config import (
     BTN_NORMAL,
     DIVIDER,
@@ -42,7 +43,9 @@ from synth_ui.ui.components.slider.slider import Slider
 from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
 
-ROW_H = 96
+# Four sections and the brightness slider share 420px under the header; the
+# slider needs ~76 of them to stay a comfortable touch target.
+ROW_H = 86
 PAD = 16
 BUTTON_H = 56
 BUTTON_MIN_W = 130
@@ -102,8 +105,8 @@ class _Section(Component):
             (self.rect.right - PAD, self.rect.bottom - 1),
         )
         title = self._font_title.render(self.title, True, TEXT_PRIMARY)
-        surface.blit(title, (self.rect.x + PAD, self.rect.y + 14))
-        y = self.rect.y + 14 + title.get_height() + 4
+        surface.blit(title, (self.rect.x + PAD, self.rect.y + 10))
+        y = self.rect.y + 10 + title.get_height() + 3
         # Text stops where the buttons start. Without this a long line renders
         # straight under them and reads as gibberish, which is easy to write by
         # accident because nothing about `lines` suggests a width limit.
@@ -150,6 +153,9 @@ class SettingsScreen(Screen):
         initial_brightness: float | None = None,
         editor_status: Callable[[], tuple[str, str] | None] | None = None,
         on_set_editor: Callable[[bool], bool] | None = None,
+        on_backup: Callable[[Callable[[bool, str], None]], None] | None = None,
+        find_backup: Callable[[], tuple[bool, Backup | None]] | None = None,
+        on_restore: Callable[[Backup], str] | None = None,
     ):
         font_large = pygame.font.Font(None, 36)
         font_medium = pygame.font.Font(None, 28)
@@ -175,6 +181,15 @@ class SettingsScreen(Screen):
         # Arming is per-action, so reaching for Restart cancels a half-pressed
         # Shut down rather than inheriting its confirmation.
         self._armed: str | None = None
+        # Backup and restore both touch the stick, which is mounted on first
+        # access and can take a second; they run on a worker, one at a time.
+        self._on_backup = on_backup
+        self._find_backup = find_backup
+        self._on_restore = on_restore
+        self._usb_busy = False
+        # Restore asks twice, like power, and says what it is about to add:
+        # the file it found is not necessarily the one the player expects.
+        self._restore_candidate: Backup | None = None
 
         self.header = Header(
             rect=pygame.Rect(0, 0, SCREEN_W, HEADER_H),
@@ -202,6 +217,14 @@ class SettingsScreen(Screen):
             buttons=[("Restart", self._restart), ("Shut down", self._shutdown)],
         )
         y += ROW_H
+        self.backup: _Section | None = None
+        if on_backup is not None and find_backup is not None and on_restore is not None:
+            self.backup = _Section(
+                pygame.Rect(0, y, SCREEN_W, ROW_H), "Backup",
+                font_medium, font_small,
+            )
+            self._set_backup_idle()
+            y += ROW_H
 
         self.brightness_slider: Slider | None = None
         if on_brightness is not None and initial_brightness is not None:
@@ -225,7 +248,7 @@ class SettingsScreen(Screen):
         self.refresh()
         self.components = tuple(
             c for c in (self.header, self.midi, self.network, self.power,
-                        self.brightness_slider)
+                        self.backup, self.brightness_slider)
             if c is not None
         )
 
@@ -362,6 +385,69 @@ class SettingsScreen(Screen):
 
         threading.Thread(target=apply, daemon=True).start()
         self.refresh()
+
+    # --- backup -------------------------------------------------------------
+
+    def _set_backup_idle(self, lines: list[tuple[str, tuple[int, int, int]]]
+                         | None = None) -> None:
+        self._restore_candidate = None
+        self.backup.buttons = [("Restore", self._restore), ("Back up", self._back_up)]
+        self.backup.lines = lines or [
+            ("Sets to a USB stick, or back from one.", TEXT_SECONDARY),
+        ]
+
+    def _back_up(self) -> None:
+        if self._usb_busy:
+            return
+        self._usb_busy = True
+        self._set_backup_idle([("Writing to USB...", TEXT_SECONDARY)])
+
+        def done(ok: bool, message: str) -> None:
+            self._usb_busy = False
+            self._set_backup_idle([
+                (message, STATUS_OK if ok else STATUS_ERR),
+                *([("Safe to remove the stick.", TEXT_SECONDARY)] if ok else []),
+            ])
+
+        self._on_backup(done)
+
+    def _restore(self) -> None:
+        """First tap finds the newest backup and says what it holds; the
+        second adds it. Sets are added alongside, never replacing, so the
+        worst a mistaken restore does is leave some sets to delete."""
+        if self._usb_busy:
+            return
+        candidate = self._restore_candidate
+        if candidate is not None:
+            message = self._on_restore(candidate)
+            self._set_backup_idle([(message, STATUS_OK)])
+            return
+        self._usb_busy = True
+        self._set_backup_idle([("Looking on USB...", TEXT_SECONDARY)])
+
+        def find() -> None:
+            try:
+                found_drive, backup = self._find_backup()
+            except Exception:
+                found_drive, backup = True, None
+            finally:
+                self._usb_busy = False
+            if not found_drive:
+                self._set_backup_idle([("No USB stick found.", STATUS_ERR)])
+            elif backup is None:
+                self._set_backup_idle([("No synth-sets backup on the stick.",
+                                        STATUS_ERR)])
+            else:
+                count = len(backup.sets)
+                self._restore_candidate = backup
+                self.backup.buttons = [("Really?", self._restore),
+                                       ("Back up", self._back_up)]
+                self.backup.lines = [
+                    (f"Add {count} set{'' if count == 1 else 's'} from", STATUS_ERR),
+                    (backup.name, TEXT_PRIMARY),
+                ]
+
+        threading.Thread(target=find, daemon=True).start()
 
     def _reconnect(self) -> None:
         self._on_reconnect()

@@ -6,11 +6,14 @@ pre-sets rig store.
 """
 
 import json
+import os
 
 from synth_ui.clients.rig import Rig, RigEffect
 from synth_ui.clients.set import (
+    BACKUP_INTERVAL_S,
     SetLibrary,
     SongSet,
+    backup_paths,
     read_sets,
     write_sets,
 )
@@ -144,7 +147,7 @@ def test_the_store_is_written_atomically(tmp_path):
     # power loss would lose it.
     path = str(tmp_path / "sets.json")
     write_sets(path, [song_set("A", ["R"])])
-    assert not (tmp_path / "sets.json.tmp").exists()
+    assert [p.name for p in tmp_path.iterdir()] == ["sets.json"]
     assert json.loads((tmp_path / "sets.json").read_text())[0]["name"] == "A"
 
 
@@ -273,3 +276,112 @@ def test_no_legacy_rigs_means_no_set(tmp_path):
         str(tmp_path / "sets.json"), legacy_rigs_path=str(tmp_path / "nope.json")
     )
     assert lib.sets == []
+
+
+def test_an_emptied_store_does_not_resurrect_the_old_rigs(tmp_path):
+    # Deleting every set leaves a valid, empty store — not a missing one.
+    rigs_path = tmp_path / "rigs.json"
+    rigs_path.write_text(json.dumps([{"name": "Old", "voice": "V"}]))
+    sets_path = str(tmp_path / "sets.json")
+    write_sets(sets_path, [])
+    assert SetLibrary.load(sets_path, legacy_rigs_path=str(rigs_path)).sets == []
+
+
+# --- backups and recovery ---------------------------------------------------
+
+def age(path, seconds):
+    """Pretend `path` was written `seconds` ago."""
+    t = os.path.getmtime(path) - seconds
+    os.utime(path, (t, t))
+
+
+def stored_names(path):
+    return [s["name"] for s in json.loads(open(path).read())]
+
+
+def test_a_save_keeps_the_version_it_replaces(tmp_path):
+    path = str(tmp_path / "sets.json")
+    write_sets(path, [song_set("First")])
+    write_sets(path, [song_set("Second")])
+    assert stored_names(path) == ["Second"]
+    assert stored_names(path + ".1") == ["First"]
+
+
+def test_backups_are_not_cycled_by_a_burst_of_saves(tmp_path):
+    # A slider drag saves many times a second; that must not push every older
+    # copy out and leave three backups of the last half-second.
+    path = str(tmp_path / "sets.json")
+    write_sets(path, [song_set("Old")])
+    for n in range(10):
+        write_sets(path, [song_set(f"Drag {n}")])
+    assert stored_names(path + ".1") == ["Old"]
+    assert backup_paths(path) == [path + ".1"]
+
+
+def test_backups_shift_and_the_oldest_falls_off(tmp_path):
+    path = str(tmp_path / "sets.json")
+    for name in ("A", "B", "C", "D", "E"):
+        write_sets(path, [song_set(name)])
+        for backup in backup_paths(path):
+            age(backup, BACKUP_INTERVAL_S + 1)
+    assert stored_names(path) == ["E"]
+    assert [stored_names(p) for p in backup_paths(path)] == [["D"], ["C"], ["B"]]
+
+
+def test_a_damaged_store_is_never_copied_over_a_good_backup(tmp_path):
+    path = str(tmp_path / "sets.json")
+    write_sets(path, [song_set("Good")])
+    write_sets(path, [song_set("Newer")])
+    age(path + ".1", BACKUP_INTERVAL_S + 1)
+    (tmp_path / "sets.json").write_text("{ torn")
+    write_sets(path, [song_set("After")])
+    assert stored_names(path + ".1") == ["Good"]
+
+
+def test_a_damaged_store_is_recovered_from_its_newest_good_backup(tmp_path):
+    path = str(tmp_path / "sets.json")
+    (tmp_path / "sets.json.1").write_text("{ also torn")
+    write_sets(str(tmp_path / "x.json"), [song_set("Gig")], backups=0)
+    os.replace(tmp_path / "x.json", tmp_path / "sets.json.2")
+    (tmp_path / "sets.json").write_text("{ torn")
+
+    lib = SetLibrary.load(path)
+    assert [s.name for s in lib.sets] == ["Gig"]
+    assert lib.recovery and "Restored" in lib.recovery
+    # Written back, so the next boot reads it normally.
+    assert stored_names(path) == ["Gig"]
+
+
+def test_a_damaged_store_is_kept_rather_than_overwritten(tmp_path):
+    # The bug this guards: an unreadable store read as "no sets", bootstrap
+    # then saved a fresh "Set 1" over it, and the original was gone.
+    path = str(tmp_path / "sets.json")
+    (tmp_path / "sets.json").write_text("{ torn")
+
+    lib = SetLibrary.load(path)
+    lib.bootstrap("Rhodes EP")
+
+    kept = [p for p in tmp_path.iterdir() if ".corrupt-" in p.name]
+    assert len(kept) == 1 and kept[0].read_text() == "{ torn"
+    assert lib.recovery and kept[0].name in lib.recovery
+    assert stored_names(path) == ["Set 1"]
+
+
+def test_a_damaged_store_does_not_trigger_the_old_rig_migration(tmp_path):
+    rigs_path = tmp_path / "rigs.json"
+    rigs_path.write_text(json.dumps([{"name": "Old", "voice": "V"}]))
+    (tmp_path / "sets.json").write_text("{ torn")
+    lib = SetLibrary.load(str(tmp_path / "sets.json"), legacy_rigs_path=str(rigs_path))
+    assert lib.sets == []
+
+
+def test_a_store_that_is_not_a_list_counts_as_damaged(tmp_path):
+    (tmp_path / "sets.json").write_text(json.dumps({"name": "not a list"}))
+    lib = SetLibrary.load(str(tmp_path / "sets.json"))
+    assert lib.recovery is not None
+
+
+def test_a_healthy_store_reports_no_recovery(tmp_path):
+    path = str(tmp_path / "sets.json")
+    write_sets(path, [song_set("A")])
+    assert SetLibrary.load(path).recovery is None

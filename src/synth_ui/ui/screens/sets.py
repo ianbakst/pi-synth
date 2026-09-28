@@ -25,10 +25,12 @@ from synth_ui.config import (
     SCREEN_H,
     SCREEN_W,
 )
+from synth_ui.ui.components.banner import Banner
 from synth_ui.ui.components.header import Header
 from synth_ui.ui.components.slider.orient import VerticalOrientation
 from synth_ui.ui.components.slider.slider import Slider
 from synth_ui.ui.components.tile_grid import Tile, TileGrid
+from synth_ui.ui.event import UIEvent
 from synth_ui.ui.screens.base import Screen
 
 # Matches the rigs screen: the volume fader runs down the right edge, so it is
@@ -88,7 +90,21 @@ class SetsScreen(Screen):
             font=font_small,
             orientation=VerticalOrientation(),
         )
-        self.components = (self.header, self.grid, self.volume_slider)
+        # Over the pads, clear of the fader: volume must stay reachable.
+        self.banner = Banner(
+            pygame.Rect(0, HEADER_H, SCREEN_W - FADER_W, SCREEN_H - HEADER_H),
+            font_medium, font_small,
+        )
+        self.components = (self.header, self.grid, self.volume_slider, self.banner)
+
+    def notify(self, text: str | None) -> None:
+        """Show a message over the pads until it's tapped."""
+        self.banner.text = text
+
+    def handle_event(self, event: UIEvent) -> None:
+        if self.banner.handle_event(event):
+            return
+        super().handle_event(event)
 
     def _tiles(self) -> list[Tile]:
         """One pad per set: its name, and how many rigs are in it. The count is

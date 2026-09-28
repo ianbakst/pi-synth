@@ -173,11 +173,24 @@ These live in `$HOME` on the board and are **not** overwritten by a deploy:
 | File | What |
 |---|---|
 | `~/.synth-sets.json` | The user's sets, each holding its own rigs — the actual instrument |
+| `~/.synth-sets.json.1`–`.3` | Earlier versions of it, at least 5 min apart, newest first. A store that won't parse is moved to `.corrupt-<time>` and the newest good copy loaded — never overwritten (`clients/set.py`) |
 | `~/.synth-rigs.json` | Pre-sets rig store. Read once to migrate, then left alone as that migration's backup |
 | `~/.synth-trims.json` | Per-voice levels measured by `tools/calibrate_levels` |
 | `~/.synth-audio-device` | Selected ALSA card. Nothing writes it any more — `start-jack.sh` resolves the DAC by name — but it still overrides if written by hand |
 | `~/.synth-state` | Last active set and rig, by id (two lines) |
 | `~/.synth-brightness` | Screen brightness, 0.0–1.0 |
+
+All of these are written through `clients/storage.write_atomic` (temp file,
+fsync, rename): the box is switched off by pulling the plug, so a plain
+`open(path, "w")` is a way to lose the file.
+
+**Backups** go to a USB stick from Settings → Backup, as
+`synth-sets-<host>-<date>.json` — the same format and name pattern as the
+browser editor's Export, so either can restore the other. Restoring *adds* sets;
+it never replaces. Sticks are mounted by `udev/99-usb-automount.rules` at
+`/media/synth/<device>` on first access and unmounted 5 s after the last, so one
+can be pulled whenever the screen isn't mid-write. Pi OS Lite has no
+automounter of its own.
 
 ### Tools
 

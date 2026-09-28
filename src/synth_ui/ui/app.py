@@ -4,6 +4,7 @@ import queue
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import replace
 
@@ -30,6 +31,13 @@ from synth_ui.clients.network import (
 )
 from synth_ui.clients.rig import Rig, RigEffect
 from synth_ui.clients.set import SetLibrary, SongSet
+from synth_ui.clients.storage import write_atomic
+from synth_ui.clients.usb_backup import (
+    Backup,
+    newest_backup,
+    usb_drives,
+    write_backup,
+)
 from synth_ui.clients.voice import Voice
 from synth_ui.config import (
     BG,
@@ -95,8 +103,7 @@ def _load_state() -> tuple[str, str]:
 
 def _save_state(set_id: str, rig_id: str) -> None:
     try:
-        with open(STATE_FILE, "w") as f:
-            f.write(f"{set_id}\n{rig_id}\n")
+        write_atomic(STATE_FILE, f"{set_id}\n{rig_id}\n")
     except Exception:
         pass
 
@@ -152,8 +159,9 @@ def _load_brightness() -> float:
 
 def _save_brightness(fraction: float) -> None:
     try:
-        with open(BRIGHTNESS_FILE, "w") as f:
-            f.write(f"{fraction:.3f}")
+        # Not durable: saved on every drag event, and an fsync each time would
+        # stall the frame loop for the sake of a brightness value.
+        write_atomic(BRIGHTNESS_FILE, f"{fraction:.3f}", durable=False)
     except OSError:
         pass
 
@@ -228,6 +236,9 @@ class SynthUI:
             on_reorder=self._on_reorder_sets,
             initial_gain=self._gain,
         )
+        # Home is where the player lands, so it is where they hear that their
+        # sets had to be recovered — or couldn't be.
+        self._home.notify(self._sets.recovery)
         self._rig_screen = RigsScreen(
             rigs=[],
             on_load_rig=self._load_rig,
@@ -681,8 +692,43 @@ class SynthUI:
             initial_brightness=(
                 self._brightness if self._backlight.available else None
             ),
+            on_backup=self._backup_to_usb,
+            find_backup=lambda: (bool(drives := usb_drives()), newest_backup(drives)),
+            on_restore=self._restore_from_usb,
         )
         self.screen = self._settings_screen
+
+    def _backup_to_usb(self, done: Callable[[bool, str], None]) -> None:
+        """Every set, as the browser's Export would download it, to the first
+        stick found. The snapshot is taken here, on the UI thread that owns the
+        sets; only the write — which waits on the stick mounting — goes to a
+        worker."""
+        sets = self._editor.export()
+
+        def write() -> None:
+            drives = usb_drives()
+            if not drives:
+                done(False, "No USB stick found.")
+                return
+            try:
+                path = write_backup(drives[0], sets)
+            except OSError as exc:
+                logger.exception("backup to %s failed", drives[0])
+                done(False, f"Could not write to the stick: {exc.strerror or exc}")
+                return
+            count = len(sets)
+            done(True, f"Saved {count} set{'' if count == 1 else 's'} as "
+                       f"{os.path.basename(path)}")
+
+        threading.Thread(target=write, daemon=True).start()
+
+    def _restore_from_usb(self, backup: Backup) -> str:
+        try:
+            added = self._sets.import_sets(backup.sets)
+        except ValueError as exc:
+            return f"Could not restore: {exc}"
+        self._after_remote_edit(False)
+        return f"Added {len(added)} set{'' if len(added) == 1 else 's'}."
 
     def _on_brightness(self, fraction: float) -> None:
         """Applied live while dragging; saved on each change.

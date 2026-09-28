@@ -22,7 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
+
+from synth_ui.clients.storage import write_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +50,10 @@ def read_trims(path: str) -> dict[str, float]:
 def write_trims(path: str, trims: dict[str, float]) -> bool:
     """Replace the trim file atomically, so an interrupted write can't leave a
     half-written file that reads as "no trims" on the next boot."""
-    directory = os.path.dirname(path) or "."
     try:
-        os.makedirs(directory, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
-        with os.fdopen(fd, "w") as f:
-            json.dump({k: round(v, 1) for k, v in sorted(trims.items())}, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
+        write_atomic(path, json.dumps(
+            {k: round(v, 1) for k, v in sorted(trims.items())}, indent=2
+        ) + "\n")
         return True
     except OSError as exc:
         logger.error("could not write trims to %s: %s", path, exc)

@@ -1,10 +1,10 @@
-import getpass
 import glob
 import os
 
 from synth_ui.clients.lv2 import LV2World
 from synth_ui.clients.soundfont import discover
 from synth_ui.clients.trims import apply_trims, read_trims
+from synth_ui.clients.usb_backup import media_roots
 from synth_ui.clients.voice import Voice, annotate
 from synth_ui.clients.voice import read_voices_manifest as _read_manifest
 
@@ -76,11 +76,7 @@ def load_voices(
 def scan_usb_soundfonts(exclude_dir: str) -> list[str]:
     """Find SF2/SF3 files on mounted USB drives, excluding the local library."""
     exclude_real = os.path.realpath(exclude_dir)
-    search_roots = [
-        f"/media/{getpass.getuser()}",
-        "/media",
-        "/mnt",
-    ]
+    search_roots = media_roots()
     seen: set[str] = set()
     fonts: list[str] = []
     for root in search_roots:

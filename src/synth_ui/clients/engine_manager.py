@@ -33,6 +33,7 @@ from synth_ui.clients.master_chain import MasterChain, MasterStage, sink_for
 from synth_ui.clients.mod_host_client import ModHostClient
 from synth_ui.clients.rig import Rig, plan
 from synth_ui.clients.slots import InstrumentSlots
+from synth_ui.clients.storage import write_atomic
 from synth_ui.clients.velocity_filter import VelocityFilter
 from synth_ui.clients.voice import Voice
 from synth_ui.config import AUDIO_DEVICE_FILE, FIXED_VELOCITY, MASTER_CHAIN, MAX_GAIN
@@ -486,8 +487,7 @@ class EngineManager:
 
     def _write_audio_device(self, card_id: str) -> None:
         try:
-            with open(self._audio_device_file, "w") as f:
-                f.write(card_id)
+            write_atomic(self._audio_device_file, card_id)
         except OSError as e:
             logger.error("could not persist audio device selection: %s", e)
 

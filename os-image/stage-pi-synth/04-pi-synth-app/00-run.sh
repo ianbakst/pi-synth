@@ -35,6 +35,14 @@ if [ -f "${PI_SYNTH_SRC}/instruments/voices.json" ]; then
 		"${ROOTFS_DIR}/home/synth/instruments/voices.json"
 fi
 
+# udev rules from the app repo (USB automount for backups). They live there
+# rather than in this stage's files/ so deploy.sh can install them on a board
+# flashed before they existed.
+mkdir -p "${ROOTFS_DIR}/etc/udev/rules.d"
+for rule in "${PI_SYNTH_SRC}"/udev/*.rules; do
+	install -m 644 "${rule}" "${ROOTFS_DIR}/etc/udev/rules.d/$(basename "${rule}")"
+done
+
 # Engine-switching sudoers rule (validated below).
 install -m 0440 files/sudoers-synth-engine "${ROOTFS_DIR}/etc/sudoers.d/synth-engine"
 

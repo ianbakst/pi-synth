@@ -1,0 +1,30 @@
+# Mount USB sticks under /media/synth/<device>, for backups and for copying
+# SoundFonts in. Pi OS Lite has no desktop and so no automounter: without this a
+# stick is never mounted and every USB screen reports an empty drive.
+#
+# systemd-mount rather than `mount` in RUN: udev runs its programs in a sandbox
+# whose mounts don't reach the rest of the system, and kills anything that
+# outlives the event. systemd-mount asks systemd to do it instead.
+#
+# --automount: mounted on first access and unmounted again 5 s after the last,
+# so the filesystem is clean whenever nothing is using it and a stick pulled
+# without asking — the only way anyone removes one from a box with no desktop —
+# loses nothing. The backup code fsyncs before it reports success, so "saved"
+# on screen means on the stick.
+#
+# FAT and exFAT (nearly every stick) have no owners, so they're given to synth
+# here; the UI runs as synth and must be able to write a backup. Other
+# filesystems are mounted as they are, with their own permissions.
+
+ACTION!="add", GOTO="usb_automount_end"
+SUBSYSTEM!="block", GOTO="usb_automount_end"
+ENV{ID_BUS}!="usb", GOTO="usb_automount_end"
+ENV{ID_FS_USAGE}!="filesystem", GOTO="usb_automount_end"
+
+ENV{ID_FS_TYPE}=="vfat|exfat", \
+  RUN{program}+="/usr/bin/systemd-mount --no-block --automount=yes --collect --timeout-idle-sec=5s --options=uid=synth,gid=synth,fmask=0133,dmask=0022,noatime $devnode /media/synth/%k", \
+  GOTO="usb_automount_end"
+
+RUN{program}+="/usr/bin/systemd-mount --no-block --automount=yes --collect --timeout-idle-sec=5s --options=noatime,nosuid,nodev $devnode /media/synth/%k"
+
+LABEL="usb_automount_end"
