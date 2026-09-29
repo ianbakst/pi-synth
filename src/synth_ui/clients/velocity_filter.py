@@ -87,9 +87,6 @@ class VelocityFilter:
         self._uri = uri
         self._instance = instance
         self._loaded = False
-        # Keyboard sources already patched into the filter, so a re-attach after
-        # a hotplug adds only the new ones.
-        self._attached: set[str] = set()
         self._velocity = 0
 
     # ------------------------------------------------------------------
@@ -144,7 +141,6 @@ class VelocityFilter:
         if self._loaded:
             self._mh.remove_plugin(self._instance, missing_ok=True)
         self._loaded = False
-        self._attached.clear()
 
     # ------------------------------------------------------------------
     # Ports
@@ -179,15 +175,19 @@ class VelocityFilter:
         Called on every wire, not once at load, for the same reason
         EngineManager re-patches the keyboards on every switch: a USB keyboard
         unplugged and plugged back in is a new JACK port.
+
+        Every source is connected every time, with no memory of what was done
+        before. A keyboard that comes back — switched off and on, woken from
+        Auto Off, replugged — returns under the *same* port name, with its old
+        connection gone. A record of "already attached" by name skipped it, and
+        every fixed-velocity rig stayed silent until the UI restarted.
+        JackGraph.connect is idempotent, so the repeat costs nothing.
         """
         midi_in = self.input_port()
         if midi_in is None:
             return
         for src in sources:
-            if src in self._attached:
-                continue
-            if self._jack.connect(src, midi_in):
-                self._attached.add(src)
+            self._jack.connect(src, midi_in)
 
     # ------------------------------------------------------------------
     # Setting

@@ -322,6 +322,22 @@ class EngineManager:
         console this is the only way to tell a sleeping piano from a cable."""
         return self._jack.keyboard_midi_sources()
 
+    def unwired_keyboards(self) -> list[str]:
+        """Keyboard MIDI sources connected to nothing at all.
+
+        With an instrument playing, every keyboard feeds something — the
+        instrument, or the velocity filter in front of it. One that feeds
+        nothing has just appeared: plugged in, switched on, woken from Auto Off,
+        or replugged — which brings it back under the *same* port name with its
+        connections gone, so a changed list of names can't be what gives it
+        away. Reads the graph only; safe off the UI thread.
+        """
+        snap = self._jack.snapshot()
+        return [
+            src for src in self._jack.keyboard_midi_sources(snap)
+            if not snap[src].connections
+        ]
+
     def reattach_midi(self) -> bool:
         """Re-patch the keyboards into whatever is playing.
 

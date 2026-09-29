@@ -158,12 +158,14 @@ def test_attach_patches_keyboards_into_the_filter():
     ]
 
 
-def test_attach_does_not_repatch_a_source_it_already_has():
-    # _wire() calls this on every voice switch; re-issuing connects would be
-    # noise on every change of instrument.
+def test_a_keyboard_that_comes_back_under_the_same_name_is_reconnected():
+    # Switched off and on, or woken from Auto Off, a USB keyboard returns as a
+    # new JACK port with the old name and no connections. Remembering it as
+    # "attached" by name left every fixed-velocity rig silent until a restart.
     filt, jack, _ = make()
     filt.ensure()
     filt.attach(["a2j:Keyboard"])
+    jack.connected.clear()           # the port went away, and its connection
     filt.attach(["a2j:Keyboard", "a2j:Pedals"])
     assert jack.connected == [
         ("a2j:Keyboard", "effect_100:midiin"),

@@ -39,6 +39,7 @@ from synth_ui.clients.usb_backup import (
     write_backup,
 )
 from synth_ui.clients.voice import Voice
+from synth_ui.clients.watch import HostWatcher, KeyboardWatcher
 from synth_ui.config import (
     BG,
     BRIGHTNESS_FILE,
@@ -286,6 +287,25 @@ class SynthUI:
         # The browser editor. Off at every boot, and never remembered as on.
         self._editor = EditorController(self)
         self._editor_server: EditorServer | None = None
+
+        # A keyboard that appears after the rig was wired — switched on, woken
+        # from Auto Off, replugged — is patched in without anyone having to
+        # tap Reconnect. Looked for off the UI thread; fixed on it.
+        self._keyboards = KeyboardWatcher(
+            find_unwired=self._engine.unwired_keyboards,
+            rewire=lambda: self.call_soon(self._rewire_keyboards),
+        )
+        self._keyboards.start()
+        # If mod-host crashes, systemd restarts it empty and nothing here can
+        # rebuild in place. Quitting hands the UI to systemd (Restart=always),
+        # and startup rebuilds the graph and restores the last rig: seconds of
+        # silence instead of silence until a rig is changed by hand.
+        self._host = HostWatcher(
+            on_restarted=lambda: self.call_soon(
+                lambda: pygame.event.post(pygame.event.Event(pygame.QUIT))
+            ),
+        )
+        self._host.start()
 
         self.screen: Screen = SplashScreen()
         self._splash_start = pygame.time.get_ticks()
@@ -983,6 +1003,14 @@ class SynthUI:
             # has already been told it failed.
             future.cancel()
             raise
+
+    def _rewire_keyboards(self) -> None:
+        """What Settings -> Reconnect does, asked for by the keyboard watcher.
+        Not while the editor has an engine operation running on a worker: that
+        is mid-way through re-patching the graph itself, and wires at the end."""
+        if self._editor.busy:
+            return
+        self._engine.reattach_midi()
 
     def call_soon(self, fn) -> None:
         """Queue `fn` for the UI thread without waiting — how a background
