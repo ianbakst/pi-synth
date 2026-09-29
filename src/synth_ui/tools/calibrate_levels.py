@@ -364,6 +364,17 @@ def check(engine: EngineManager, midi_file: str) -> int:
     return 0 if ok else 1
 
 
+def _ui_running() -> bool:
+    """Whether synth-ui.service is up. False wherever systemd isn't."""
+    try:
+        return subprocess.run(
+            ["systemctl", "is-active", "--quiet", "synth-ui.service"],
+            timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--manifest", default=VOICES_MANIFEST)
@@ -401,6 +412,14 @@ def main(argv: list[str] | None = None) -> int:
         voices = [v for v in voices if v.name == args.only]
     if not voices:
         print("no voices to calibrate", file=sys.stderr)
+        return 1
+    if _ui_running():
+        # The UI owns mod-host's instances, including the scratch slot this
+        # loads into; with it running every voice, and the limiter, reports
+        # "failed to load", which reads as a broken library rather than this.
+        print("the UI is running and holds mod-host — stop it first:\n"
+              "  sudo systemctl stop synth-ui   (and start it again after)",
+              file=sys.stderr)
         return 1
     if not args.check:
         minutes = len(voices) * (_CAPTURE_SECONDS + 2.0) / 60.0

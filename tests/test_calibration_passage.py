@@ -121,3 +121,21 @@ class TestTrimClamp:
 
         assert not _clamped(_trim_for(-14.0, -18.0))  # the same voice at unity
         assert _trim_for(-14.0, -18.0) == -4.0
+
+
+def test_calibration_refuses_while_the_ui_holds_mod_host(monkeypatch, capsys):
+    """With the UI up, every load fails with a message that blames the voice."""
+    from types import SimpleNamespace
+
+    from synth_ui.tools import calibrate_levels
+
+    voice = SimpleNamespace(name="V", category="Synth", unavailable_reason=None)
+    monkeypatch.setattr(calibrate_levels, "load_voices", lambda m, s: [voice])
+    monkeypatch.setattr(calibrate_levels, "_ui_running", lambda: True)
+
+    def engine():
+        raise AssertionError("must not take over mod-host")
+
+    monkeypatch.setattr(calibrate_levels, "EngineManager", engine)
+    assert calibrate_levels.main([]) == 1
+    assert "stop it first" in capsys.readouterr().err

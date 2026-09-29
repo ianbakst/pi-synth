@@ -69,5 +69,138 @@
     "category": "Piano",
     "resident": false,
     "params": { "num_voices": 64 }
+  },
+  {
+    "name": "Stereo Rhodes",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/rhodes/StereoRhodes/rhodes.sfz",
+    "category": "Electric Piano",
+    "resident": false
+  },
+  {
+    "name": "Wurlitzer",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/wurlitzer/Wurt/wurly.sfz",
+    "category": "Electric Piano",
+    "resident": false
+  },
+  {
+    "name": "Hohner Clav",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/clavinet/Clavinet/clavinet.sfz",
+    "category": "Electric Piano",
+    "resident": false
+  },
+  {
+    "name": "Orchestra Strings",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/MixedSect/strings.sfz",
+    "category": "Ensemble",
+    "resident": false
+  },
+  {
+    "name": "Violin Section",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Violin/ViolinSect/violins.sfz",
+    "category": "Ensemble",
+    "resident": false
+  },
+  {
+    "name": "Cello Section",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Cello/CelloSect/cellos.sfz",
+    "category": "Ensemble",
+    "resident": false
+  },
+  {
+    "name": "Pizzicato Strings",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Violin/ViolinSect/violins_pizzi.sfz",
+    "category": "Ensemble",
+    "resident": false
+  },
+  {
+    "name": "Chamber Choir",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Choir/choir.sfz",
+    "category": "Ensemble",
+    "resident": false
+  },
+  {
+    "name": "Solo Violin",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Violin/SoloViolin/violin_vib.sfz",
+    "category": "Strings",
+    "resident": false
+  },
+  {
+    "name": "Solo Cello",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Cello/SoloCello/cello_vib.sfz",
+    "category": "Strings",
+    "resident": false
+  },
+  {
+    "name": "Concert Harp",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Harp/harp.sfz",
+    "category": "Strings",
+    "resident": false
+  },
+  {
+    "name": "Orchestra Brass",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/MixedSect/brass.sfz",
+    "category": "Brass",
+    "resident": false
+  },
+  {
+    "name": "Horn Section",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/FrenchHorn/HornSect/horns.sfz",
+    "category": "Brass",
+    "resident": false
+  },
+  {
+    "name": "Solo Trumpet",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Trumpet/SoloTrumpet/trumpet_vib.sfz",
+    "category": "Brass",
+    "resident": false
+  },
+  {
+    "name": "Solo Trombone",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Trombone/SoloTrombone/trombone_vib.sfz",
+    "category": "Brass",
+    "resident": false
+  },
+  {
+    "name": "Solo Oboe",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Oboe/SoloOboe/oboe_vib.sfz",
+    "category": "Reed",
+    "resident": false
+  },
+  {
+    "name": "Solo Clarinet",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Clarinet/SoloClarinet/clarinet_vib.sfz",
+    "category": "Reed",
+    "resident": false
+  },
+  {
+    "name": "Solo Alto Sax",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Sax/AltoSax/altosax_vib.sfz",
+    "category": "Reed",
+    "resident": false
+  },
+  {
+    "name": "Solo Flute",
+    "engine": "sfizz",
+    "path": "/home/synth/instruments/nbo/NoBudgetOrch/Flute/SoloFlute/flute_vib.sfz",
+    "category": "Pipe",
+    "resident": false
   }
 ]

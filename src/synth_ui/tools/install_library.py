@@ -25,9 +25,11 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import sys
 import tarfile
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -118,6 +120,8 @@ def patch_salamander(text: str) -> str:
 # playback, and FLAC would put a decode on the audio thread — which is the last
 # place this box needs more work, given sfizz is already the suspected source of
 # its xruns.
+_BANDSHED = "https://www.bandshed.net/sounds/sfz"
+
 LIBRARIES: dict[str, Library] = {
     "salamander": Library(
         name="Salamander Grand Piano V3",
@@ -132,6 +136,39 @@ LIBRARIES: dict[str, Library] = {
                    "SalamanderGrandPianoV3-pisynth.sfz",
             transform=patch_salamander,
         ),
+    ),
+    # The rest are from the No-Budget Orchestra collection's sample host. Zip
+    # archives of 44.1 kHz WAV; sizes are unpacked. Neither keyboard archive
+    # carries a licence file; the orchestra has one per instrument.
+    "rhodes": Library(
+        name="Stereo Rhodes",
+        url=f"{_BANDSHED}/stereo_rhodes.zip",
+        megabytes=77,
+        license="free for music use (bandshed.net, no licence file)",
+        note="Fender Rhodes, stereo. Mapping: StereoRhodes/rhodes.sfz",
+    ),
+    "wurlitzer": Library(
+        name="Wurlitzer",
+        url=f"{_BANDSHED}/wurt.zip",
+        megabytes=8,
+        license="free for music use (bandshed.net, no licence file)",
+        note="Wurlitzer electric piano. Mapping: Wurt/wurly.sfz",
+    ),
+    "clavinet": Library(
+        name="Clavinet",
+        url=f"{_BANDSHED}/clavinet.zip",
+        megabytes=19,
+        license="free for music use (bandshed.net, no licence file)",
+        note="Hohner Clavinet. Mapping: Clavinet/clavinet.sfz",
+    ),
+    "nbo": Library(
+        name="No-Budget Orchestra 2",
+        url=f"{_BANDSHED}/nbo_2.zip",
+        megabytes=721,
+        license="per instrument, see each license.txt (mostly CC BY-SA 4.0, "
+                "Jeff Glatt; the rest CC Sampling+/CC0 freesound packs)",
+        note="Strings, brass, woodwinds, choir, orchestral percussion — "
+             "~250 mappings under NoBudgetOrch/.",
     ),
 }
 
@@ -160,6 +197,43 @@ def _safe_members(tar: tarfile.TarFile, dest: str):
         yield member
 
 
+def _safe_zip_names(zf: zipfile.ZipFile, dest: str):
+    """The zip counterpart of `_safe_members`: names that stay inside `dest`.
+    Symlinks are dropped outright — zipfile would write them out as small text
+    files holding the link target, which is never what a sample library meant.
+    """
+    dest = os.path.realpath(dest)
+    for info in zf.infolist():
+        target = os.path.realpath(os.path.join(dest, info.filename))
+        if not (target == dest or target.startswith(dest + os.sep)):
+            print(f"  skipping {info.filename}: escapes the target directory",
+                  file=sys.stderr)
+            continue
+        if stat.S_ISLNK(info.external_attr >> 16):
+            print(f"  skipping link {info.filename}", file=sys.stderr)
+            continue
+        yield info.filename
+
+
+def _extract(archive: str, target: str) -> None:
+    """Unpack a tar (any compression) or zip archive into `target`. Raises
+    tarfile.TarError, zipfile.BadZipFile or OSError."""
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(target, members=list(_safe_zip_names(zf, target)))
+        return
+    with tarfile.open(archive) as tar:
+        members = _safe_members(tar, target)
+        # `filter="data"` is belt-and-braces on top of _safe_members: it also
+        # drops setuid bits and device nodes. It landed in 3.11.4 and becomes
+        # the default in 3.14, so ask for it only where it exists rather than
+        # pinning the board's Python version.
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(target, members=members, filter="data")
+        else:
+            tar.extractall(target, members=members)
+
+
 def _free_megabytes(path: str) -> int:
     while not os.path.exists(path):
         path = os.path.dirname(path) or "/"
@@ -174,6 +248,10 @@ def _download(url: str, dest: str) -> bool:
         print(f"\r  {done / 1e6:.0f} / {total / 1e6:.0f} MB "
               f"({done * 100 // total}%)", end="", file=sys.stderr)
 
+    # bandshed.net answers Python's default User-Agent with 403.
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("User-Agent", "pi-synth install_library")]
+    urllib.request.install_opener(opener)
     try:
         urllib.request.urlretrieve(url, dest, reporthook=progress)
         print(file=sys.stderr)
@@ -229,17 +307,8 @@ def install(key: str, root: str, keep_archive: bool = False) -> int:
 
     print("  unpacking ...", file=sys.stderr)
     try:
-        with tarfile.open(archive) as tar:
-            members = _safe_members(tar, target)
-            # `filter="data"` is belt-and-braces on top of _safe_members: it also
-            # drops setuid bits and device nodes. It landed in 3.11.4 and becomes
-            # the default in 3.14, so ask for it only where it exists rather than
-            # pinning the board's Python version.
-            if hasattr(tarfile, "data_filter"):
-                tar.extractall(target, members=members, filter="data")
-            else:
-                tar.extractall(target, members=members)
-    except (tarfile.TarError, OSError) as exc:
+        _extract(archive, target)
+    except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
         print(f"unpack failed: {exc}", file=sys.stderr)
         return 1
     if not keep_archive:
@@ -271,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", default=INSTRUMENTS_DIR)
     parser.add_argument("--list", action="store_true", help="show what's available")
     parser.add_argument("--keep-archive", action="store_true",
-                        help="don't delete the tarball after unpacking")
+                        help="don't delete the archive after unpacking")
     parser.add_argument("--patch", action="store_true",
                         help="only rewrite the patched mapping of an installed "
                              "library")

@@ -196,3 +196,54 @@ class TestCatalogue:
             assert lib.url.startswith("https://"), key
             assert lib.megabytes > 0, key
             assert lib.license, key
+
+
+def _zip(tmp_path, names, links=()):
+    import stat
+    import zipfile
+
+    path = tmp_path / "a.zip"
+    with zipfile.ZipFile(path, "w") as zf:
+        for name in names:
+            zf.writestr(name, b"x")
+        for name, target in links:
+            info = zipfile.ZipInfo(name)
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(info, target)
+    return path
+
+
+class TestZip:
+    """bandshed.net's libraries are zips; same filtering as tar."""
+
+    def test_unpacks_a_zip(self, tmp_path):
+        from synth_ui.tools.install_library import _extract
+
+        archive = _zip(tmp_path, ["Wurt/wurly.sfz", "Wurt/a.wav"])
+        _extract(str(archive), str(tmp_path / "out"))
+        assert (tmp_path / "out" / "Wurt" / "wurly.sfz").read_bytes() == b"x"
+
+    def test_traversal_and_links_are_skipped(self, tmp_path):
+        import zipfile
+
+        from synth_ui.tools.install_library import _safe_zip_names
+
+        archive = _zip(tmp_path, ["../escape.txt", "ok.sfz"],
+                       links=[("evil", "/etc/passwd")])
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with zipfile.ZipFile(archive) as zf:
+            assert list(_safe_zip_names(zf, str(dest))) == ["ok.sfz"]
+
+    def test_install_reports_mappings_from_a_zip(self, tmp_path, monkeypatch, capsys):
+        archive = _zip(tmp_path, ["Clavinet/clavinet.sfz", "Clavinet/a.wav"])
+        monkeypatch.setattr(
+            "synth_ui.tools.install_library._free_megabytes", lambda _p: 999_999
+        )
+        monkeypatch.setattr(
+            "synth_ui.tools.install_library._download",
+            lambda url, dest: os.replace(str(archive), dest) or True,
+        )
+        assert install("clavinet", str(tmp_path / "root")) == 0
+        assert "clavinet.sfz" in capsys.readouterr().out
+        assert not (tmp_path / "root" / "clavinet" / "clavinet.zip").exists()
